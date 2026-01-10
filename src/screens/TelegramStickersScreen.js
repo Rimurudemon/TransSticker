@@ -9,7 +9,10 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  Modal,
+  SafeAreaView,
 } from "react-native";
+import { WebView } from "react-native-webview";
 import { useStickers } from "../context/StickerContext";
 import TelegramService from "../services/TelegramService";
 
@@ -19,8 +22,12 @@ export default function TelegramStickersScreen({ navigation }) {
   const [stickerPack, setStickerPack] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [showBrowser, setShowBrowser] = useState(false);
+  const [browserUrl, setBrowserUrl] = useState("https://tlgrm.eu/stickers");
+  const [canImportFromBrowser, setCanImportFromBrowser] = useState(false);
 
   const extractPackName = (input) => {
+    if (!input) return "";
     // Handle full URLs like https://t.me/addstickers/PackName
     const urlMatch = input.match(
       /(?:t\.me\/addstickers\/|telegram\.me\/addstickers\/)([a-zA-Z0-9_]+)/
@@ -28,11 +35,21 @@ export default function TelegramStickersScreen({ navigation }) {
     if (urlMatch) {
       return urlMatch[1];
     }
+    // Handle tg protocol like tg://addstickers?set=PackName
+    const tgMatch = input.match(/addstickers\?set=([a-zA-Z0-9_]+)/);
+    if (tgMatch) {
+      return tgMatch[1];
+    }
+    // Handle tlgrm.eu/stickers/PackName format
+    const tlgrmMatch = input.match(/tlgrm\.eu\/stickers\/([a-zA-Z0-9_]+)/);
+    if (tlgrmMatch) {
+      return tlgrmMatch[1];
+    }
     // Otherwise treat as pack name directly
     return input.trim();
   };
 
-  const fetchStickerPack = async () => {
+  const fetchStickerPack = async (nameOverride) => {
     if (!telegramBotToken) {
       Alert.alert(
         "Bot Token Required",
@@ -47,7 +64,9 @@ export default function TelegramStickersScreen({ navigation }) {
       return;
     }
 
-    if (!packInput.trim()) {
+    const nameToSearch = nameOverride || packInput;
+
+    if (!nameToSearch || !nameToSearch.trim()) {
       setError("Please enter a sticker pack name or URL");
       return;
     }
@@ -56,8 +75,13 @@ export default function TelegramStickersScreen({ navigation }) {
     setError("");
     setStickerPack(null);
 
+    // If fetch was triggered by browser, update input visually
+    if (nameOverride) {
+      setPackInput(nameOverride);
+    }
+
     try {
-      const packName = extractPackName(packInput);
+      const packName = extractPackName(nameToSearch);
       const telegramService = new TelegramService(telegramBotToken);
       const pack = await telegramService.getStickerPack(packName);
 
@@ -77,6 +101,31 @@ export default function TelegramStickersScreen({ navigation }) {
     if (stickerPack) {
       setCurrentPack(stickerPack);
       navigation.navigate("StickerPackDetail", { pack: stickerPack });
+    }
+  };
+
+  // Enhanced Browser Handler
+  const handleWebViewStateChange = (event) => {
+    const url = event.url;
+    setBrowserUrl(url);
+
+    // Check if current page is a sticker pack page
+    const packName = extractPackName(url);
+    const isPackPage =
+      packName &&
+      packName !== url &&
+      !url.includes("google") &&
+      /^[a-zA-Z0-9_]+$/.test(packName) &&
+      packName.toLowerCase() !== "addstickers";
+
+    setCanImportFromBrowser(isPackPage);
+  };
+
+  const handleImportFromBrowser = () => {
+    const packName = extractPackName(browserUrl);
+    if (packName) {
+      setShowBrowser(false);
+      setTimeout(() => fetchStickerPack(packName), 500);
     }
   };
 
@@ -104,7 +153,7 @@ export default function TelegramStickersScreen({ navigation }) {
         />
         <TouchableOpacity
           style={[styles.searchButton, loading && styles.searchButtonDisabled]}
-          onPress={fetchStickerPack}
+          onPress={() => fetchStickerPack()}
           disabled={loading}
         >
           {loading ? (
@@ -115,6 +164,14 @@ export default function TelegramStickersScreen({ navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* New Browse Button */}
+      <TouchableOpacity
+        style={styles.browseButton}
+        onPress={() => setShowBrowser(true)}
+      >
+        <Text style={styles.browseButtonText}>🌐 Find Packs Online</Text>
+      </TouchableOpacity>
+
       {error ? (
         <View style={styles.errorContainer}>
           <Text style={styles.errorText}>❌ {error}</Text>
@@ -124,9 +181,13 @@ export default function TelegramStickersScreen({ navigation }) {
       {stickerPack && (
         <View style={styles.packContainer}>
           <View style={styles.packHeader}>
-            <View>
-              <Text style={styles.packName}>{stickerPack.name}</Text>
-              <Text style={styles.packTitle}>{stickerPack.title}</Text>
+            <View style={styles.packInfo}>
+              <Text style={styles.packName} numberOfLines={1}>
+                {stickerPack.name}
+              </Text>
+              <Text style={styles.packTitle} numberOfLines={1}>
+                {stickerPack.title}
+              </Text>
               <Text style={styles.stickerCount}>
                 {stickerPack.stickers?.length || 0} stickers
               </Text>
@@ -150,12 +211,14 @@ export default function TelegramStickersScreen({ navigation }) {
         </View>
       )}
 
+      {/* Placeholder content when no pack is loaded */}
       {!stickerPack && !loading && !error && (
         <View style={styles.placeholderContainer}>
           <Text style={styles.placeholderIcon}>🔍</Text>
           <Text style={styles.placeholderTitle}>Search for Stickers</Text>
           <Text style={styles.placeholderText}>
-            Enter a Telegram sticker pack name or paste a t.me/addstickers link
+            Enter a Telegram sticker pack name, paste a t.me/addstickers link,
+            or use the online browser.
           </Text>
           <View style={styles.exampleContainer}>
             <Text style={styles.exampleLabel}>Examples:</Text>
@@ -166,6 +229,43 @@ export default function TelegramStickersScreen({ navigation }) {
           </View>
         </View>
       )}
+
+      {/* Browser Modal */}
+      <Modal
+        visible={showBrowser}
+        animationType="slide"
+        onRequestClose={() => setShowBrowser(false)}
+      >
+        <SafeAreaView style={styles.browserSafeArea}>
+          <View style={styles.browserHeader}>
+            <TouchableOpacity
+              onPress={() => setShowBrowser(false)}
+              style={styles.closeButton}
+            >
+              <Text style={styles.closeButtonText}>Close</Text>
+            </TouchableOpacity>
+
+            {canImportFromBrowser ? (
+              <TouchableOpacity
+                style={styles.importBrowserButton}
+                onPress={handleImportFromBrowser}
+              >
+                <Text style={styles.importBrowserButtonText}>
+                  📥 Choose this Pack
+                </Text>
+              </TouchableOpacity>
+            ) : (
+              <Text style={styles.browserTitle}>Find stickers...</Text>
+            )}
+          </View>
+          <WebView
+            source={{ uri: "https://tlgrm.eu/stickers" }}
+            onNavigationStateChange={handleWebViewStateChange}
+            startInLoadingState={true}
+            style={{ flex: 1 }}
+          />
+        </SafeAreaView>
+      </Modal>
     </View>
   );
 }
@@ -178,6 +278,7 @@ const styles = StyleSheet.create({
   searchContainer: {
     flexDirection: "row",
     padding: 16,
+    paddingBottom: 0,
     gap: 12,
   },
   input: {
@@ -203,6 +304,65 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
     fontSize: 16,
   },
+  // Browse Button Styles
+  browseButton: {
+    backgroundColor: "#25D366", // WhatsApp Green for action
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+    marginHorizontal: 16,
+    marginBottom: 16,
+    marginTop: 10,
+  },
+  browseButtonText: {
+    color: "#fff",
+    fontWeight: "600",
+    fontSize: 16,
+  },
+  // Browser Modal Styles
+  browserSafeArea: {
+    flex: 1,
+    backgroundColor: "#0f0f1a",
+    paddingTop: 10,
+  },
+  browserHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: 10,
+    paddingVertical: 12,
+    backgroundColor: "#1a1a2e",
+    borderBottomWidth: 1,
+    borderBottomColor: "#333",
+    minHeight: 60,
+  },
+  closeButton: {
+    padding: 10,
+  },
+  closeButtonText: {
+    color: "#6C63FF",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  browserTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#888",
+    marginRight: 10,
+  },
+  importBrowserButton: {
+    backgroundColor: "#25D366",
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 20,
+    marginRight: 10,
+  },
+  importBrowserButtonText: {
+    color: "#fff",
+    fontWeight: "bold",
+    fontSize: 14,
+  },
+  // Existing Error Styles
   errorContainer: {
     backgroundColor: "#3d1f1f",
     marginHorizontal: 16,
@@ -227,6 +387,10 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     marginBottom: 16,
   },
+  packInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
   packName: {
     color: "#6C63FF",
     fontSize: 14,
@@ -247,6 +411,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16,
     paddingVertical: 10,
     borderRadius: 8,
+    flexShrink: 0,
   },
   selectButtonText: {
     color: "#fff",
