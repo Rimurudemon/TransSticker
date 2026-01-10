@@ -1,21 +1,14 @@
 /**
  * WhatsApp Sticker Integration Service
  *
- * Note: Full WhatsApp Sticker pack integration requires native Android modules.
- * This service provides the interface and documentation for implementing
- * the WhatsApp Stickers SDK integration.
- *
- * For full integration, you need to:
- * 1. Add the WhatsApp Stickers SDK to android/app/build.gradle
- * 2. Create a ContentProvider for sticker packs
- * 3. Implement the native module bridge
+ * This service integrates with the native WhatsAppStickers module
+ * for full sticker pack integration with WhatsApp.
  */
 
-import { NativeModules, Linking, Platform } from "react-native";
-import * as FileSystem from "expo-file-system";
+import { NativeModules, Linking, Platform, Alert } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
 
-// This would be the native module interface
-// const { WhatsAppStickersModule } = NativeModules;
+const { WhatsAppStickers } = NativeModules;
 
 export default class WhatsAppService {
   constructor() {
@@ -24,13 +17,26 @@ export default class WhatsAppService {
   }
 
   /**
+   * Check if native module is available
+   */
+  isNativeModuleAvailable() {
+    return Platform.OS === "android" && WhatsAppStickers != null;
+  }
+
+  /**
    * Check if WhatsApp is installed
    */
   async isWhatsAppInstalled() {
     try {
+      // First try native module (more reliable)
+      if (this.isNativeModuleAvailable()) {
+        return await WhatsAppStickers.isWhatsAppInstalled();
+      }
+      // Fallback to Linking
       const canOpen = await Linking.canOpenURL("whatsapp://");
       return canOpen;
     } catch (error) {
+      console.error("Error checking WhatsApp installation:", error);
       return false;
     }
   }
@@ -48,13 +54,13 @@ export default class WhatsAppService {
   }
 
   /**
-   * Create a sticker pack for WhatsApp
+   * Create and register a sticker pack for WhatsApp
    *
    * Pack requirements:
    * - Identifier: Unique string
    * - Name: Display name (max 128 chars)
    * - Publisher: Publisher name (max 128 chars)
-   * - Tray image: 96x96 PNG
+   * - Tray image: 96x96 PNG/WebP
    * - Stickers: 3-30 stickers, each 512x512 WebP, max 100KB
    */
   async createPack(packData) {
@@ -90,47 +96,86 @@ export default class WhatsAppService {
       await FileSystem.makeDirectoryAsync(packPath, { intermediates: true });
     }
 
-    // Copy tray image
+    // Copy tray image (PNG format for WhatsApp tray icons)
     const trayDestPath = packPath + "tray.png";
     await FileSystem.copyAsync({
       from: trayImagePath,
       to: trayDestPath,
     });
 
-    // Copy stickers
-    const stickerPaths = [];
+    // Copy stickers and build sticker array for native module
+    const stickerArray = [];
     for (let i = 0; i < stickers.length; i++) {
       const sticker = stickers[i];
-      const stickerDestPath = packPath + `sticker_${i}.webp`;
+      const fileName = `sticker_${i}.webp`;
+      const stickerDestPath = packPath + fileName;
+
+      console.log(
+        `Copying sticker ${i}: from ${sticker.localPath} to ${stickerDestPath}`
+      );
+
       await FileSystem.copyAsync({
         from: sticker.localPath,
         to: stickerDestPath,
       });
-      stickerPaths.push(stickerDestPath);
+
+      // Get the real file path (remove file:// prefix if present)
+      let filePath = stickerDestPath;
+      if (filePath.startsWith("file://")) {
+        filePath = filePath.substring(7);
+      }
+
+      // Verify file exists
+      const fileInfo = await FileSystem.getInfoAsync(stickerDestPath);
+      console.log(
+        `Sticker ${i} exists: ${fileInfo.exists}, size: ${fileInfo.size}, path: ${filePath}`
+      );
+
+      stickerArray.push({
+        fileName: fileName,
+        filePath: filePath,
+        emojis: sticker.emojis || ["😀"],
+      });
     }
+
+    // Get tray file path
+    let trayFilePath = trayDestPath;
+    if (trayFilePath.startsWith("file://")) {
+      trayFilePath = trayFilePath.substring(7);
+    }
+
+    // Verify tray icon exists
+    const trayInfo = await FileSystem.getInfoAsync(trayDestPath);
+    console.log(
+      `Tray icon exists: ${trayInfo.exists}, size: ${trayInfo.size}, path: ${trayFilePath}`
+    );
 
     // Create pack metadata
     const packMetadata = {
       identifier,
       name,
       publisher,
-      trayImageFile: trayDestPath,
+      trayImageFile: "tray.png",
+      trayImagePath: trayFilePath,
       publisherEmail: publisherEmail || "",
       publisherWebsite: publisherWebsite || "",
       privacyPolicyWebsite: privacyPolicyWebsite || "",
       licenseAgreementWebsite: licenseAgreementWebsite || "",
-      stickers: stickerPaths.map((path, index) => ({
-        imageFile: path,
-        emojis: stickers[index].emojis || ["😀"],
-      })),
+      stickers: stickerArray,
     };
 
-    // Save metadata
+    // Save metadata locally
     const metadataPath = packPath + "metadata.json";
     await FileSystem.writeAsStringAsync(
       metadataPath,
       JSON.stringify(packMetadata, null, 2)
     );
+
+    // Register with native module if available
+    if (this.isNativeModuleAvailable()) {
+      await WhatsAppStickers.registerStickerPack(packMetadata);
+      console.log("Registered sticker pack with native module:", name);
+    }
 
     return packMetadata;
   }
@@ -138,12 +183,10 @@ export default class WhatsAppService {
   /**
    * Add sticker pack to WhatsApp
    *
-   * This requires native module implementation.
-   * For Expo managed workflow, you may need to use expo-dev-client
-   * or eject to bare workflow.
+   * This uses the native module to communicate with WhatsApp
+   * via the stickers protocol.
    */
-  async addPackToWhatsApp(packIdentifier) {
-    // Check if native module is available
+  async addPackToWhatsApp(packIdentifier, packName) {
     if (Platform.OS !== "android") {
       throw new Error("WhatsApp sticker packs are only supported on Android");
     }
@@ -153,45 +196,41 @@ export default class WhatsAppService {
       throw new Error("WhatsApp is not installed");
     }
 
-    // Native module call would go here
-    // if (WhatsAppStickersModule) {
-    //   return await WhatsAppStickersModule.addStickerPack(packIdentifier);
-    // }
+    if (!this.isNativeModuleAvailable()) {
+      throw new Error(
+        "Native WhatsApp Stickers module not available. " +
+          "Please build the app with 'npx expo run:android' or use EAS Build."
+      );
+    }
 
-    throw new Error(
-      "Native WhatsApp Stickers module not available. " +
-        "Please see the README for integration instructions."
+    // Load pack metadata to ensure it's registered
+    const packPath = this.packDir + packIdentifier + "/";
+    const metadataPath = packPath + "metadata.json";
+    const metadataInfo = await FileSystem.getInfoAsync(metadataPath);
+
+    if (metadataInfo.exists) {
+      const metadataStr = await FileSystem.readAsStringAsync(metadataPath);
+      const metadata = JSON.parse(metadataStr);
+
+      // Re-register pack to ensure it's in the ContentProvider
+      await WhatsAppStickers.registerStickerPack(metadata);
+    }
+
+    // Send pack to WhatsApp
+    return await WhatsAppStickers.addStickerPackToWhatsApp(
+      packIdentifier,
+      packName || packIdentifier
     );
   }
 
   /**
-   * Get integration instructions
+   * Get the content provider authority
    */
-  getIntegrationInstructions() {
-    return `
-WhatsApp Stickers SDK Integration Guide
-========================================
-
-To fully integrate WhatsApp sticker packs, you need to add native Android code:
-
-1. Add the WhatsApp Stickers SDK dependency to android/app/build.gradle:
-   implementation 'com.whatsapp:stickers:1.0.0'
-
-2. Create a ContentProvider class that extends StickerContentProvider
-
-3. Register the ContentProvider in AndroidManifest.xml
-
-4. Create a native module to bridge React Native with the SDK
-
-5. Use expo-dev-client for development with native modules
-
-For detailed instructions, see:
-- WhatsApp Stickers GitHub: https://github.com/nicksay/whatsapp-stickers
-- Expo Custom Development Builds: https://docs.expo.dev/development/introduction/
-
-Alternative: Use the share functionality to share individual stickers,
-which doesn't require native SDK integration.
-    `;
+  async getAuthority() {
+    if (this.isNativeModuleAvailable()) {
+      return await WhatsAppStickers.getAuthority();
+    }
+    return "com.transsticker.app.stickercontentprovider";
   }
 
   /**
@@ -230,5 +269,47 @@ which doesn't require native SDK integration.
   async deletePack(packIdentifier) {
     const packPath = this.packDir + packIdentifier + "/";
     await FileSystem.deleteAsync(packPath, { idempotent: true });
+
+    // Clear from native module
+    if (this.isNativeModuleAvailable()) {
+      // Note: Current implementation clears all packs
+      // A more sophisticated version would remove just this pack
+    }
+  }
+
+  /**
+   * Clear all sticker packs from native cache
+   */
+  async clearAllPacks() {
+    if (this.isNativeModuleAvailable()) {
+      await WhatsAppStickers.clearStickerPacks();
+    }
+
+    // Also delete local files
+    const dirInfo = await FileSystem.getInfoAsync(this.packDir);
+    if (dirInfo.exists) {
+      await FileSystem.deleteAsync(this.packDir, { idempotent: true });
+    }
+  }
+
+  /**
+   * Show integration status
+   */
+  showIntegrationStatus() {
+    if (this.isNativeModuleAvailable()) {
+      Alert.alert(
+        "Native Module Active",
+        "WhatsApp Stickers native integration is active. You can add full sticker packs to WhatsApp.",
+        [{ text: "OK" }]
+      );
+    } else {
+      Alert.alert(
+        "Native Module Not Available",
+        "The app is running in Expo Go which doesn't support native modules. " +
+          "Build a development build with 'npx expo run:android' or use EAS Build " +
+          "to enable full WhatsApp sticker pack integration.",
+        [{ text: "OK" }]
+      );
+    }
   }
 }

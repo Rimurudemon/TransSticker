@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -11,15 +11,27 @@ import {
   ActivityIndicator,
   Linking,
   Platform,
+  NativeModules,
 } from "react-native";
 import * as Sharing from "expo-sharing";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
+import WhatsAppService from "../services/WhatsAppService";
+import StickerConverter from "../utils/StickerConverter";
+
+const whatsappService = new WhatsAppService();
+const stickerConverter = new StickerConverter();
 
 export default function WhatsAppExportScreen({ route, navigation }) {
   const { pack } = route.params;
   const [packName, setPackName] = useState(pack.title || "My Sticker Pack");
   const [author, setAuthor] = useState("TransSticker");
   const [exporting, setExporting] = useState(false);
+  const [nativeModuleAvailable, setNativeModuleAvailable] = useState(false);
+
+  useEffect(() => {
+    // Check if native module is available
+    setNativeModuleAvailable(whatsappService.isNativeModuleAvailable());
+  }, []);
 
   const exportToWhatsApp = async () => {
     if (!packName.trim()) {
@@ -41,56 +53,128 @@ export default function WhatsAppExportScreen({ route, navigation }) {
     setExporting(true);
 
     try {
-      // Note: Direct WhatsApp Sticker integration requires native module
-      // This implementation uses sharing as a fallback
-
-      // Check if WhatsApp is installed
-      const whatsappUrl = "whatsapp://";
-      const canOpen = await Linking.canOpenURL(whatsappUrl);
-
-      if (!canOpen) {
-        Alert.alert(
-          "WhatsApp Not Found",
-          "Please install WhatsApp to export stickers.",
-          [{ text: "OK" }]
-        );
-        setExporting(false);
-        return;
+      // Check if native module is available for full integration
+      if (nativeModuleAvailable) {
+        await exportWithNativeModule();
+      } else {
+        // Fallback: offer sharing options
+        await exportWithFallback();
       }
-
-      // For full WhatsApp Sticker pack integration, you would need:
-      // 1. Android: Use the official WhatsApp Stickers SDK (native module)
-      // 2. Create a content provider for the sticker pack
-      // 3. Register the sticker pack with proper metadata
-
-      // Current implementation: Share stickers individually
-      Alert.alert(
-        "Export Method",
-        "How would you like to export your stickers?",
-        [
-          {
-            text: "Share Individual Stickers",
-            onPress: () => shareStickers(),
-          },
-          {
-            text: "Create Sticker Pack (Requires Setup)",
-            onPress: () => showNativeSetupInfo(),
-          },
-          {
-            text: "Cancel",
-            style: "cancel",
-          },
-        ]
-      );
     } catch (error) {
       console.error("Export error:", error);
       Alert.alert(
         "Export Failed",
-        "Failed to export stickers. Please try again."
+        error.message || "Failed to export stickers. Please try again."
       );
     } finally {
       setExporting(false);
     }
+  };
+
+  const exportWithNativeModule = async () => {
+    try {
+      // Create a unique identifier for this pack
+      const identifier = `transsticker_${Date.now()}`;
+
+      // Create tray icon (96x96)
+      const firstSticker = pack.stickers[0];
+      let trayImagePath;
+
+      if (firstSticker?.localPath) {
+        // Use the first sticker as tray icon, resized to 96x96
+        trayImagePath = await stickerConverter.createTrayIcon(
+          firstSticker.localPath
+        );
+      } else {
+        throw new Error("No stickers available to create tray icon");
+      }
+
+      // Prepare stickers array
+      const stickersData = pack.stickers.map((sticker, index) => ({
+        localPath: sticker.localPath,
+        emojis: sticker.emoji ? [sticker.emoji] : ["😀"],
+      }));
+
+      // Create the pack
+      const packData = {
+        identifier,
+        name: packName.trim(),
+        publisher: author.trim() || "TransSticker",
+        trayImagePath,
+        stickers: stickersData,
+      };
+
+      await whatsappService.createPack(packData);
+
+      // Add to WhatsApp
+      await whatsappService.addPackToWhatsApp(identifier, packName.trim());
+
+      Alert.alert(
+        "Success!",
+        "Sticker pack has been sent to WhatsApp. Follow the prompts in WhatsApp to add it.",
+        [{ text: "OK" }]
+      );
+    } catch (error) {
+      console.error("Native export error:", error);
+      throw error;
+    }
+  };
+
+  const exportWithFallback = async () => {
+    // Try multiple methods to detect WhatsApp
+    let whatsappAvailable = false;
+
+    // Method 1: Try whatsapp:// scheme
+    try {
+      whatsappAvailable = await Linking.canOpenURL("whatsapp://send");
+    } catch (e) {
+      console.log("whatsapp:// check failed:", e);
+    }
+
+    // Method 2: Try WhatsApp package directly (Android)
+    if (!whatsappAvailable && Platform.OS === "android") {
+      try {
+        whatsappAvailable = await Linking.canOpenURL("https://wa.me/");
+      } catch (e) {
+        console.log("wa.me check failed:", e);
+      }
+    }
+
+    // Even if detection fails, offer to share (might still work)
+    if (!whatsappAvailable) {
+      Alert.alert(
+        "WhatsApp Detection",
+        "Could not detect WhatsApp automatically. This may be due to Android security restrictions.\n\nWould you like to try sharing anyway?",
+        [
+          {
+            text: "Cancel",
+            style: "cancel",
+          },
+          { text: "Try Sharing", onPress: () => shareStickers() },
+        ]
+      );
+      return;
+    }
+
+    // Show export options
+    Alert.alert(
+      "Native Module Required",
+      "Full sticker pack export requires a native build of the app.\n\n" +
+        "You're running in Expo Go which doesn't support native modules.\n\n" +
+        "Options:\n" +
+        "• Share individual stickers as images\n" +
+        "• Build the app with 'npx expo run:android' for full integration",
+      [
+        {
+          text: "Share Stickers",
+          onPress: () => shareStickers(),
+        },
+        {
+          text: "Cancel",
+          style: "cancel",
+        },
+      ]
+    );
   };
 
   const shareStickers = async () => {
@@ -116,19 +200,6 @@ export default function WhatsAppExportScreen({ route, navigation }) {
       console.error("Share error:", error);
       Alert.alert("Share Failed", "Failed to share sticker.");
     }
-  };
-
-  const showNativeSetupInfo = () => {
-    Alert.alert(
-      "Native Integration Required",
-      "Full WhatsApp Sticker Pack integration requires setting up the WhatsApp Stickers SDK in a native Android module.\n\n" +
-        "Steps:\n" +
-        "1. Add whatsapp-stickers-sdk to your project\n" +
-        "2. Create a ContentProvider for stickers\n" +
-        "3. Register your sticker packs\n\n" +
-        "See the project README for detailed instructions.",
-      [{ text: "OK" }]
-    );
   };
 
   const renderSticker = ({ item, index }) => (

@@ -45,3 +45,11 @@ coverage/
 
 # Build outputs
 build/
+
+
+#logs
+logcat*.txt
+
+
+#local issues
+issues.md

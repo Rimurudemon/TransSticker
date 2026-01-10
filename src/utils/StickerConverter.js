@@ -1,5 +1,5 @@
 import * as ImageManipulator from "expo-image-manipulator";
-import * as FileSystem from "expo-file-system";
+import * as FileSystem from "expo-file-system/legacy";
 
 // WhatsApp sticker requirements
 const WHATSAPP_STICKER_SIZE = 512;
@@ -106,6 +106,7 @@ export default class StickerConverter {
 
   /**
    * Create a tray icon (96x96) from a sticker
+   * WhatsApp requires PNG format for tray icons, max 50KB
    */
   async createTrayIcon(inputPath) {
     await this.initOutputDir();
@@ -123,7 +124,7 @@ export default class StickerConverter {
         ],
         {
           format: ImageManipulator.SaveFormat.PNG,
-          compress: 1,
+          compress: 0.9,
         }
       );
 
@@ -134,6 +135,8 @@ export default class StickerConverter {
         from: result.uri,
         to: outputPath,
       });
+
+      console.log(`Created tray icon at: ${outputPath}`);
 
       return outputPath;
     } catch (error) {
