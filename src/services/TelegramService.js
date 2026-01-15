@@ -76,16 +76,34 @@ export default class TelegramService {
           ...sticker,
           thumbnail: thumbnailUrl,
           file_url: thumbnailUrl,
+          // Individual sticker animated/video flag
+          is_animated: sticker.is_animated || false,
+          is_video: sticker.is_video || false,
         };
       })
     );
+
+    // Determine if pack is animated - check pack-level flag or sticker_format
+    const isAnimated =
+      result.is_animated || result.sticker_format === "animated";
+    const isVideo = result.is_video || result.sticker_format === "video";
+
+    console.log("Pack info:", {
+      name: result.name,
+      sticker_format: result.sticker_format,
+      is_animated: result.is_animated,
+      is_video: result.is_video,
+      computed_isAnimated: isAnimated,
+      computed_isVideo: isVideo,
+    });
 
     return {
       name: result.name,
       title: result.title,
       sticker_type: result.sticker_type,
-      is_animated: result.is_animated,
-      is_video: result.is_video,
+      sticker_format: result.sticker_format,
+      is_animated: isAnimated,
+      is_video: isVideo,
       stickers: stickersWithThumbnails,
     };
   }

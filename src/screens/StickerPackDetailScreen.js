@@ -76,15 +76,34 @@ export default function StickerPackDetailScreen({ route, navigation }) {
         try {
           // Download the sticker file
           const fileUrl = await telegramService.getFileUrl(sticker.file_id);
+
+          // Check if this sticker is animated (TGS) or video
+          const isAnimatedSticker = pack.is_animated || sticker.is_animated;
+          const isVideoSticker = pack.is_video || sticker.is_video;
+
+          // Determine extension based on sticker type
+          let extension = "webp";
+          if (isAnimatedSticker) extension = "tgs";
+          else if (isVideoSticker) extension = "webm";
+
+          console.log(
+            `Sticker ${i}: isAnimated=${isAnimatedSticker}, isVideo=${isVideoSticker}, extension=${extension}`
+          );
+
           const localPath = await telegramService.downloadFile(
             fileUrl,
-            `${pack.name}_${i}.webp`
+            `${pack.name}_${i}.${extension}`
           );
+
+          console.log(`Downloaded sticker to: ${localPath}`);
 
           // Convert to WhatsApp format
           const convertedPath = await converter.convertToWhatsAppFormat(
-            localPath
+            localPath,
+            isAnimatedSticker || isVideoSticker
           );
+
+          console.log(`Converted sticker to: ${convertedPath}`);
 
           downloadedStickers.push({
             ...sticker,
@@ -143,6 +162,8 @@ export default function StickerPackDetailScreen({ route, navigation }) {
 
   const renderSticker = ({ item }) => {
     const isSelected = selectedStickers.includes(item.file_id);
+    const isAnimated = pack.is_animated || item.is_animated;
+    const isVideo = pack.is_video || item.is_video;
     return (
       <TouchableOpacity
         style={[styles.stickerItem, isSelected && styles.stickerSelected]}
@@ -153,6 +174,13 @@ export default function StickerPackDetailScreen({ route, navigation }) {
           style={styles.stickerImage}
           resizeMode="contain"
         />
+        {(isAnimated || isVideo) && (
+          <View style={styles.animatedIndicator}>
+            <Text style={styles.animatedIndicatorText}>
+              {isVideo ? "▶" : "◆"}
+            </Text>
+          </View>
+        )}
         {isSelected && (
           <View style={styles.checkmark}>
             <Text style={styles.checkmarkText}>✓</Text>
@@ -165,8 +193,10 @@ export default function StickerPackDetailScreen({ route, navigation }) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <View>
-          <Text style={styles.packTitle}>{pack.title}</Text>
+        <View style={styles.headerInfo}>
+          <Text style={styles.packTitle} numberOfLines={1}>
+            {pack.title}
+          </Text>
           <Text style={styles.packSubtitle}>
             {selectedStickers.length} of {pack.stickers?.length || 0} selected
           </Text>
@@ -214,7 +244,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
       )}
 
       <Text style={styles.noteText}>
-        * WhatsApp requires minimum 3 stickers per pack
+        * WhatsApp requires mnimum 3 stickers per pack
       </Text>
     </View>
   );
@@ -232,6 +262,10 @@ const styles = StyleSheet.create({
     padding: 16,
     backgroundColor: "#1a1a2e",
   },
+  headerInfo: {
+    flex: 1,
+    marginRight: 12,
+  },
   packTitle: {
     color: "#fff",
     fontSize: 20,
@@ -245,6 +279,7 @@ const styles = StyleSheet.create({
   headerButtons: {
     flexDirection: "row",
     gap: 8,
+    flexShrink: 0,
   },
   headerButton: {
     backgroundColor: "#2d2d44",
@@ -349,5 +384,21 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#666",
     fontSize: 12,
+  },
+  animatedIndicator: {
+    position: "absolute",
+    bottom: 4,
+    left: 4,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#FFD700",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  animatedIndicatorText: {
+    color: "#000",
+    fontSize: 10,
+    fontWeight: "bold",
   },
 });

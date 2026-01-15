@@ -191,6 +191,11 @@ export default function TelegramStickersScreen({ navigation }) {
               <Text style={styles.stickerCount}>
                 {stickerPack.stickers?.length || 0} stickers
               </Text>
+              {stickerPack.is_animated && (
+                <View style={styles.animatedBadge}>
+                  <Text style={styles.animatedText}>▶ Animated</Text>
+                </View>
+              )}
             </View>
             <TouchableOpacity
               style={styles.selectButton}
@@ -405,6 +410,19 @@ const styles = StyleSheet.create({
   stickerCount: {
     color: "#888",
     fontSize: 14,
+  },
+  animatedBadge: {
+    backgroundColor: "#FFD700",
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 4,
+    alignSelf: "flex-start",
+    marginTop: 4,
+  },
+  animatedText: {
+    color: "#000",
+    fontSize: 10,
+    fontWeight: "bold",
   },
   selectButton: {
     backgroundColor: "#25D366",

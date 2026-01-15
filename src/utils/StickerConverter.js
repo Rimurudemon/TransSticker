@@ -24,9 +24,77 @@ export default class StickerConverter {
   }
 
   /**
+   * Convert an animated sticker (TGS) to WhatsApp format (WebP) via API
+   */
+  async convertAnimatedSticker(inputPath) {
+    await this.initOutputDir();
+
+    console.log("Converting animated sticker:", inputPath);
+
+    const formData = new FormData();
+    formData.append("sticker", {
+      uri: inputPath,
+      name: "sticker.tgs",
+      type: "application/gzip",
+    });
+
+    try {
+      console.log("Sending to conversion API...");
+      const response = await fetch(
+        "https://sticker-api.iitmandi.co.in/convert",
+        {
+          method: "POST",
+          body: formData,
+        }
+      );
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error("Conversion API error:", response.status, errorText);
+        throw new Error(
+          `Conversion API failed with status ${response.status}: ${errorText}`
+        );
+      }
+
+      console.log("Conversion API success, processing response...");
+      const blob = await response.blob();
+
+      return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.readAsDataURL(blob);
+        reader.onloadend = async () => {
+          try {
+            const base64data = reader.result.split(",")[1];
+            const filename = `sticker_${Date.now()}_${Math.random()
+              .toString(36)
+              .substr(2, 9)}.webp`;
+            const outputPath = this.outputDir + filename;
+
+            await FileSystem.writeAsStringAsync(outputPath, base64data, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+
+            resolve(outputPath);
+          } catch (err) {
+            reject(err);
+          }
+        };
+        reader.onerror = (err) => reject(err);
+      });
+    } catch (error) {
+      console.error("Error converting animated sticker:", error);
+      throw error;
+    }
+  }
+
+  /**
    * Convert a sticker to WhatsApp format (512x512 WebP)
    */
-  async convertToWhatsAppFormat(inputPath) {
+  async convertToWhatsAppFormat(inputPath, isAnimated = false) {
+    if (isAnimated) {
+      return this.convertAnimatedSticker(inputPath);
+    }
+
     await this.initOutputDir();
 
     try {

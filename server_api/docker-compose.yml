@@ -1,0 +1,14 @@
+version: "3.8"
+
+services:
+  sticker-converter:
+    build: .
+    container_name: sticker_converter_api
+    ports:
+      - "8201:8201"
+    restart: unless-stopped
+    volumes:
+      - ./uploads:/app/uploads
+    shm_size: "1gb"
+    environment:
+      - NODE_ENV=production
