@@ -7,6 +7,13 @@
     "multer": "^1.4.5-lts.1",
     "puppeteer": "^22.0.0",
     "lottie-web": "^5.12.2",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "expo": "~54.0.31",
+    "react": "19.1.0",
+    "react-native": "0.81.5"
+  },
+  "scripts": {
+    "android": "expo run:android",
+    "ios": "expo run:ios"
   }
 }

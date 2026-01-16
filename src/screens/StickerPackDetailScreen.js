@@ -69,6 +69,9 @@ export default function StickerPackDetailScreen({ route, navigation }) {
       );
 
       const downloadedStickers = [];
+      let hasAnimatedSticker = false;
+      let hasVideoSticker = false;
+
       for (let i = 0; i < selectedStickerData.length; i++) {
         const sticker = selectedStickerData[i];
         setProgress(Math.round(((i + 1) / selectedStickerData.length) * 100));
@@ -81,6 +84,9 @@ export default function StickerPackDetailScreen({ route, navigation }) {
           const isAnimatedSticker = pack.is_animated || sticker.is_animated;
           const isVideoSticker = pack.is_video || sticker.is_video;
 
+          if (isAnimatedSticker) hasAnimatedSticker = true;
+          if (isVideoSticker) hasVideoSticker = true;
+
           // Determine extension based on sticker type
           let extension = "webp";
           if (isAnimatedSticker) extension = "tgs";
@@ -92,31 +98,39 @@ export default function StickerPackDetailScreen({ route, navigation }) {
 
           const localPath = await telegramService.downloadFile(
             fileUrl,
-            `${pack.name}_${i}.${extension}`
+            `${pack.name}_${sticker.file_unique_id}.${extension}`
           );
 
           console.log(`Downloaded sticker to: ${localPath}`);
 
           // Convert to WhatsApp format
-          const convertedPath = await converter.convertToWhatsAppFormat(
-            localPath,
-            isAnimatedSticker || isVideoSticker
-          );
+          let convertedPath;
+          try {
+            convertedPath = await converter.convertToWhatsAppFormat(
+              localPath,
+              isAnimatedSticker || isVideoSticker
+            );
+            console.log(`Converted sticker to: ${convertedPath}`);
 
-          console.log(`Converted sticker to: ${convertedPath}`);
-
-          downloadedStickers.push({
-            ...sticker,
-            localPath: convertedPath,
-            originalPath: localPath,
-          });
+            downloadedStickers.push({
+              ...sticker,
+              localPath: convertedPath,
+              originalPath: localPath,
+            });
+          } catch (convErr) {
+            console.error(
+              `Conversion failed for sticker ${i}, skipping:`,
+              convErr
+            );
+            // Continue loop, just don't add to downloadedStickers
+          }
         } catch (err) {
           console.error(`Failed to download sticker ${i}:`, err);
         }
       }
 
       if (downloadedStickers.length === 0) {
-        throw new Error("Failed to download any stickers");
+        throw new Error("Failed to download or convert any stickers");
       }
 
       // Create tray icon from first sticker
@@ -132,6 +146,9 @@ export default function StickerPackDetailScreen({ route, navigation }) {
         trayIcon: trayIconPath,
         source: "telegram",
         originalPackName: pack.name,
+        isAnimated: hasAnimatedSticker || hasVideoSticker,
+        is_animated: hasAnimatedSticker,
+        is_video: hasVideoSticker,
       });
 
       Alert.alert(

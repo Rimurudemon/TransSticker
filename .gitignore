@@ -53,3 +53,15 @@ logcat*.txt
 
 #local issues
 issues.md
+
+test_temp/
+
+
+test-api.js
+diagnose_pack.js
+test_local_server.js
+
+server_api/android/
+server_api/node_modules/
+server_api/temp/
+server_api/package-lock.json

@@ -74,6 +74,7 @@ export default class WhatsAppService {
       publisherWebsite,
       privacyPolicyWebsite,
       licenseAgreementWebsite,
+      animatedStickerPack,
     } = packData;
 
     // Validate pack
@@ -161,6 +162,7 @@ export default class WhatsAppService {
       publisherWebsite: publisherWebsite || "",
       privacyPolicyWebsite: privacyPolicyWebsite || "",
       licenseAgreementWebsite: licenseAgreementWebsite || "",
+      animatedStickerPack: !!animatedStickerPack,
       stickers: stickerArray,
     };
 

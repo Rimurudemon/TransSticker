@@ -18,7 +18,7 @@ app.get("/health", (req, res) => {
 
 // WhatsApp Limits
 const MAX_SIZE_PX = 512;
-const FPS = 30;
+const FPS = 20; // Reduced from 30 to save size
 
 // Helper: Recursive delete to clean up temp files
 const deleteFolderRecursive = (directoryPath) => {
@@ -157,26 +157,63 @@ app.post("/convert", upload.single("sticker"), async (req, res) => {
     // === COMMON STEP: FFMPEG ENCODING ===
     console.log(`[${jobId}] Encoding WebP...`);
 
-    await new Promise((resolve, reject) => {
-      // Command explanation:
-      // -t 3: force clip to 3 seconds max (useful for video inputs)
-      // -vf: scale to 512x512
-      // -c:v libwebp: use WebP encoder
-      // -lossless 0 -compression_level 6 -q:v 40: Optimized for <500KB
-      // -an: remove audio
-      // -loop 0: infinite loop
-
-      const cmd = `ffmpeg ${ffmpegInputOptions} -i ${ffmpegInput} -t 3 -vf "fps=${FPS},scale=${MAX_SIZE_PX}:${MAX_SIZE_PX}" -c:v libwebp -lossless 0 -compression_level 6 -q:v 40 -preset default -loop 0 -an -vsync 0 "${outputWebP}"`;
-
-      exec(cmd, (error, stdout, stderr) => {
-        if (error) {
-          console.error(`FFmpeg Error: ${stderr}`);
-          reject(error);
-        } else {
-          resolve();
-        }
+    const runFfmpeg = (params) => {
+      return new Promise((resolve, reject) => {
+        const cmd = `ffmpeg ${ffmpegInputOptions} -y -i ${ffmpegInput} -t 10 -vf "fps=${FPS},scale=${MAX_SIZE_PX}:${MAX_SIZE_PX}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${MAX_SIZE_PX}:${MAX_SIZE_PX}:(ow-iw)/2:(oh-ih)/2:color=0x00000000" -c:v libwebp -lossless 0 -preset default -loop 0 -an -vsync 0 ${params} "${outputWebP}"`;
+        exec(cmd, (error, stdout, stderr) => {
+          if (error) {
+            console.error(`FFmpeg Error: ${stderr}`);
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
       });
-    });
+    };
+
+    // Iterative compression strategy
+    // Pass 1: Good quality
+    // Pass 2: Medium quality
+    // Pass 3: Low quality (Aggressive)
+    const compressionPasses = [
+      "-compression_level 4 -q:v 60",
+      "-compression_level 6 -q:v 30",
+      "-compression_level 6 -q:v 10",
+    ];
+
+    let success = false;
+    for (const params of compressionPasses) {
+      console.log(`[${jobId}] Trying compression: ${params}`);
+      try {
+        await runFfmpeg(params);
+
+        const stats = fs.statSync(outputWebP);
+        const fileSizeKB = stats.size / 1024;
+        console.log(`[${jobId}] Result size: ${fileSizeKB.toFixed(2)}KB`);
+
+        if (fileSizeKB < 500) {
+          success = true;
+          break;
+        } else {
+          console.log(`[${jobId}] File too large, trying next pass...`);
+        }
+      } catch (err) {
+        console.error(`[${jobId}] Pass failed:`, err);
+      }
+    }
+
+    if (!success) {
+      // If all passes fail or result is still too large, we might still send what we have
+      // or throw error. WhatsApp strict limit is 500KB.
+      const stats = fs.statSync(outputWebP);
+      if (stats.size > 500 * 1024) {
+        throw new Error(
+          `Unable to compress under 500KB. Final size: ${(
+            stats.size / 1024
+          ).toFixed(2)}KB`
+        );
+      }
+    }
 
     // 6. Send File & Cleanup
     res.download(outputWebP, "sticker.webp", (err) => {
@@ -196,7 +233,7 @@ app.post("/convert", upload.single("sticker"), async (req, res) => {
 });
 
 // Start Server
-const PORT = 8201;
+const PORT = 8202;
 app.listen(PORT, () => {
   console.log(`Sticker Converter running on port ${PORT}`);
   if (!fs.existsSync("temp")) fs.mkdirSync("temp");

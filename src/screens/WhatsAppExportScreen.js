@@ -95,6 +95,18 @@ export default function WhatsAppExportScreen({ route, navigation }) {
         emojis: sticker.emoji ? [sticker.emoji] : ["😀"],
       }));
 
+      // Determine if pack is animated by checking stickers
+      // Some saved packs might not have the isAnimated flag at root level
+      const hasAnimatedStickers = pack.stickers.some(
+        (s) => s.is_animated || s.is_video
+      );
+      const isAnimatedPack =
+        pack.isAnimated ||
+        pack.is_animated ||
+        pack.is_video ||
+        hasAnimatedStickers ||
+        false;
+
       // Create the pack
       const packData = {
         identifier,
@@ -102,6 +114,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
         publisher: author.trim() || "TransSticker",
         trayImagePath,
         stickers: stickersData,
+        animatedStickerPack: isAnimatedPack,
       };
 
       await whatsappService.createPack(packData);

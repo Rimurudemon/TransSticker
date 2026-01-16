@@ -4,7 +4,8 @@ import * as FileSystem from "expo-file-system/legacy";
 // WhatsApp sticker requirements
 const WHATSAPP_STICKER_SIZE = 512;
 const WHATSAPP_TRAY_ICON_SIZE = 96;
-const MAX_STICKER_FILE_SIZE = 100 * 1024; // 100 KB
+const MAX_STATIC_STICKER_SIZE = 100 * 1024; // 100 KB
+const MAX_ANIMATED_STICKER_SIZE = 500 * 1024; // 500 KB
 
 export default class StickerConverter {
   constructor() {
@@ -24,29 +25,64 @@ export default class StickerConverter {
   }
 
   /**
-   * Convert an animated sticker (TGS) to WhatsApp format (WebP) via API
+   * Convert an animated sticker (TGS or WebM) to WhatsApp format (WebP) via API
+   * @param {string} inputPath - Path to the sticker file
+   * @param {string} stickerType - Type of sticker: 'tgs', 'webm', or auto-detect
    */
-  async convertAnimatedSticker(inputPath) {
+  async convertAnimatedSticker(inputPath, stickerType = null) {
     await this.initOutputDir();
 
-    console.log("Converting animated sticker:", inputPath);
+    // Auto-detect sticker type from path if not provided
+    const lowerPath = inputPath.toLowerCase();
+    let detectedType = stickerType;
+    let mimeType = "application/octet-stream";
+    let fileName = "sticker.bin";
+
+    if (!detectedType) {
+      if (lowerPath.endsWith(".tgs")) {
+        detectedType = "tgs";
+      } else if (lowerPath.endsWith(".webm")) {
+        detectedType = "webm";
+      } else {
+        detectedType = "tgs"; // Default to TGS
+      }
+    }
+
+    // Set correct MIME type and filename based on sticker type
+    if (detectedType === "webm") {
+      mimeType = "video/webm";
+      fileName = "sticker.webm";
+    } else {
+      mimeType = "application/gzip";
+      fileName = "sticker.tgs";
+    }
+
+    console.log(`Converting ${detectedType} sticker:`, inputPath);
 
     const formData = new FormData();
     formData.append("sticker", {
       uri: inputPath,
-      name: "sticker.tgs",
-      type: "application/gzip",
+      name: fileName,
+      type: mimeType,
     });
 
     try {
-      console.log("Sending to conversion API...");
+      console.log(`Sending ${detectedType} sticker to conversion API...`);
+
+      // Set up timeout for API call (2 minutes for TGS which uses Puppeteer)
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 120000);
+
       const response = await fetch(
         "https://sticker-api.iitmandi.co.in/convert",
         {
           method: "POST",
           body: formData,
+          signal: controller.signal,
         }
       );
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         const errorText = await response.text();
@@ -73,6 +109,17 @@ export default class StickerConverter {
             await FileSystem.writeAsStringAsync(outputPath, base64data, {
               encoding: FileSystem.EncodingType.Base64,
             });
+
+            // Validate Animated Sticker Size (Max 500KB)
+            const fileInfo = await FileSystem.getInfoAsync(outputPath);
+            if (fileInfo.size > MAX_ANIMATED_STICKER_SIZE) {
+              await FileSystem.deleteAsync(outputPath, { idempotent: true });
+              throw new Error(
+                `Animated sticker too large: ${(fileInfo.size / 1024).toFixed(
+                  2
+                )}KB (Max 500KB)`
+              );
+            }
 
             resolve(outputPath);
           } catch (err) {
@@ -129,14 +176,20 @@ export default class StickerConverter {
 
       // Check file size and compress more if needed
       const fileInfo = await FileSystem.getInfoAsync(outputPath);
-      if (fileInfo.size > MAX_STICKER_FILE_SIZE) {
+      if (fileInfo.size > MAX_STATIC_STICKER_SIZE) {
         return await this.compressSticker(outputPath);
       }
 
       return outputPath;
     } catch (error) {
       console.error("Error converting sticker:", error);
-      // If conversion fails, try to copy the original
+
+      // If animated conversion failed, do NOT copy original as it might be invalid (e.g. webm -> webp)
+      if (isAnimated) {
+        throw new Error(`Animated sticker conversion failed: ${error.message}`);
+      }
+
+      // If conversion fails for static, try to copy the original
       const filename = `sticker_${Date.now()}.webp`;
       const outputPath = this.outputDir + filename;
       await FileSystem.copyAsync({
@@ -165,7 +218,7 @@ export default class StickerConverter {
 
     // Check if still too large
     const fileInfo = await FileSystem.getInfoAsync(inputPath);
-    if (fileInfo.size > MAX_STICKER_FILE_SIZE && quality > 0.3) {
+    if (fileInfo.size > MAX_STATIC_STICKER_SIZE && quality > 0.3) {
       return await this.compressSticker(inputPath, quality - 0.1);
     }
 
