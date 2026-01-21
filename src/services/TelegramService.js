@@ -49,12 +49,13 @@ export default class TelegramService {
   async getStickerPack(packName) {
     const result = await this.apiRequest("getStickerSet", { name: packName });
 
-    // Process stickers to get thumbnail URLs
+    // Process stickers to get thumbnail URLs AND actual file URLs
     const stickersWithThumbnails = await Promise.all(
       result.stickers.map(async (sticker) => {
         let thumbnailUrl = null;
+        let stickerFileUrl = null;
 
-        // Try to get thumbnail
+        // Try to get thumbnail (for preview)
         if (sticker.thumbnail) {
           try {
             thumbnailUrl = await this.getFileUrl(sticker.thumbnail.file_id);
@@ -63,19 +64,22 @@ export default class TelegramService {
           }
         }
 
-        // If no thumbnail, try the sticker file itself
+        // Always get the actual sticker file URL (for playback)
+        try {
+          stickerFileUrl = await this.getFileUrl(sticker.file_id);
+        } catch (err) {
+          console.warn("Failed to get sticker file URL:", err);
+        }
+
+        // If no thumbnail available, use the sticker file URL as fallback
         if (!thumbnailUrl) {
-          try {
-            thumbnailUrl = await this.getFileUrl(sticker.file_id);
-          } catch (err) {
-            console.warn("Failed to get sticker URL:", err);
-          }
+          thumbnailUrl = stickerFileUrl;
         }
 
         return {
           ...sticker,
           thumbnail: thumbnailUrl,
-          file_url: thumbnailUrl,
+          file_url: stickerFileUrl, // This is the actual sticker file (WebM, TGS, or WebP)
           // Individual sticker animated/video flag
           is_animated: sticker.is_animated || false,
           is_video: sticker.is_video || false,

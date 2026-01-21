@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { View, StyleSheet, ActivityIndicator } from "react-native";
 import { Image } from "expo-image";
 import { Video, ResizeMode } from "expo-av";
@@ -20,23 +20,42 @@ export default function AnimatedSticker({
   const [lottieJson, setLottieJson] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(false);
+  const [videoReady, setVideoReady] = useState(false);
+  const [videoError, setVideoError] = useState(false);
+  const videoRef = useRef(null);
 
   const { is_animated, is_video, file_id, localPath, file_url, thumbnail } =
     sticker;
 
-  // Determine actual type based on file extension first (since files are converted when saved)
-  // Extension takes priority over pack-level flags because stickers are converted to WebP format
-  const isWebp = localPath && localPath.endsWith(".webp");
-  const isWebm = localPath && localPath.endsWith(".webm");
-  const isTgsFile = localPath && localPath.endsWith(".tgs");
-  
-  // Only treat as TGS if it's actually a .tgs file, or if is_animated flag is set AND no local file exists yet
-  const isTgs = isTgsFile || (!localPath && is_animated);
-  // Only treat as WebM if it's actually a .webm file, or if is_video flag is set AND no local file exists yet  
-  const isVideo = isWebm || (!localPath && is_video);
-
-  // URL to use
+  // Get the URI to use - prefer localPath for saved stickers, file_url for remote
   const uri = localPath || file_url;
+  
+  // Helper to check file extension from any path/url
+  const getExtension = (path) => {
+    if (!path) return null;
+    const match = path.match(/\.([a-zA-Z0-9]+)(?:\?.*)?$/);
+    return match ? match[1].toLowerCase() : null;
+  };
+  
+  // Check extension from localPath first, then file_url
+  const ext = getExtension(localPath) || getExtension(file_url);
+  
+  // Determine actual type based on file extension first
+  const isWebpByExt = ext === "webp";
+  const isWebmByExt = ext === "webm";
+  const isTgsByExt = ext === "tgs";
+  
+  // For type detection: extension wins, then flags
+  // If we have a converted local WebP, treat it as WebP regardless of flags
+  const isTgs = isTgsByExt || (!localPath && !ext && is_animated);
+  const isVideoSticker = isWebmByExt || (!localPath && !ext && is_video);
+  const isWebp = isWebpByExt || (!isTgs && !isVideoSticker);
+
+  // Reset video states when URI changes
+  useEffect(() => {
+    setVideoReady(false);
+    setVideoError(false);
+  }, [uri]);
 
   useEffect(() => {
     let mounted = true;
@@ -105,6 +124,29 @@ export default function AnimatedSticker({
     };
   }, [uri, isTgs]);
 
+  // Render thumbnail with optional loading indicator
+  const renderThumbnail = (showLoader = true) => (
+    <View style={[style, styles.loadingContainer]}>
+      <Image
+        source={{ uri: thumbnail || file_url }}
+        style={StyleSheet.absoluteFill}
+        contentFit={resizeMode}
+      />
+      {showLoader && (
+        <ActivityIndicator 
+          color="#6C63FF" 
+          size="small" 
+          style={styles.loader}
+        />
+      )}
+    </View>
+  );
+
+  // Show loading state with thumbnail placeholder for TGS
+  if (loading || (isTgs && !lottieJson && !error)) {
+    return renderThumbnail(true);
+  }
+
   if (error) {
     return (
       <Image
@@ -128,19 +170,61 @@ export default function AnimatedSticker({
     );
   }
 
-  // 2. WebM (Video)
-  if (isVideo) {
+  // 2. WebM (Video) - Show thumbnail until video is ready
+  if (isVideoSticker) {
+    // If video failed to load (codec error), just show thumbnail
+    if (videoError) {
+      return (
+        <View style={[style, styles.videoContainer]}>
+          <Image
+            source={{ uri: thumbnail || file_url }}
+            style={StyleSheet.absoluteFill}
+            contentFit={resizeMode}
+          />
+          {/* Show play icon to indicate it's a video */}
+          <View style={styles.playIconContainer}>
+            <View style={styles.playIcon} />
+          </View>
+        </View>
+      );
+    }
+    
     return (
-      <Video
-        source={{ uri }}
-        style={style}
-        resizeMode={
-          resizeMode === "contain" ? ResizeMode.CONTAIN : ResizeMode.COVER
-        }
-        isLooping
-        shouldPlay={playing}
-        isMuted={true}
-      />
+      <View style={[style, styles.videoContainer]}>
+        {/* Always render thumbnail behind video */}
+        <Image
+          source={{ uri: thumbnail || file_url }}
+          style={StyleSheet.absoluteFill}
+          contentFit={resizeMode}
+        />
+        
+        {/* Video loads on top, becomes visible when ready */}
+        <Video
+          ref={videoRef}
+          source={{ uri }}
+          style={[StyleSheet.absoluteFill, { opacity: videoReady ? 1 : 0 }]}
+          resizeMode={
+            resizeMode === "contain" ? ResizeMode.CONTAIN : ResizeMode.COVER
+          }
+          isLooping
+          shouldPlay={playing}
+          isMuted={true}
+          onReadyForDisplay={() => setVideoReady(true)}
+          onError={(err) => {
+            console.warn("Video codec not supported, falling back to thumbnail");
+            setVideoError(true);
+          }}
+        />
+        
+        {/* Show loading indicator while video loads */}
+        {!videoReady && (
+          <ActivityIndicator 
+            color="#6C63FF" 
+            size="small" 
+            style={styles.loader}
+          />
+        )}
+      </View>
     );
   }
 
@@ -159,8 +243,38 @@ export default function AnimatedSticker({
 }
 
 const styles = StyleSheet.create({
+  loadingContainer: {
+    justifyContent: "center",
+    alignItems: "center",
+    overflow: "hidden",
+  },
+  videoContainer: {
+    overflow: "hidden",
+    justifyContent: "center",
+    alignItems: "center",
+  },
   loader: {
     position: "absolute",
     alignSelf: "center",
+  },
+  playIconContainer: {
+    position: "absolute",
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "rgba(0, 0, 0, 0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  playIcon: {
+    width: 0,
+    height: 0,
+    marginLeft: 3,
+    borderLeftWidth: 10,
+    borderLeftColor: "#fff",
+    borderTopWidth: 6,
+    borderTopColor: "transparent",
+    borderBottomWidth: 6,
+    borderBottomColor: "transparent",
   },
 });

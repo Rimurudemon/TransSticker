@@ -6,7 +6,6 @@ import {
   TextInput,
   TouchableOpacity,
   FlatList,
-  Image,
   ActivityIndicator,
   Alert,
   Modal,
@@ -15,6 +14,7 @@ import {
 import { WebView } from "react-native-webview";
 import { useStickers } from "../context/StickerContext";
 import TelegramService from "../services/TelegramService";
+import AnimatedSticker from "../components/AnimatedSticker";
 
 export default function TelegramStickersScreen({ navigation }) {
   const { telegramBotToken, setCurrentPack } = useStickers();
@@ -129,15 +129,34 @@ export default function TelegramStickersScreen({ navigation }) {
     }
   };
 
-  const renderSticker = ({ item, index }) => (
-    <View style={styles.stickerItem}>
-      <Image
-        source={{ uri: item.thumbnail || item.file_url }}
-        style={styles.stickerImage}
-        resizeMode="contain"
-      />
-    </View>
-  );
+  const renderSticker = ({ item, index }) => {
+    // Pass pack-level and sticker-level animation flags
+    const isAnimated = stickerPack?.is_animated || item.is_animated;
+    const isVideo = stickerPack?.is_video || item.is_video;
+    
+    return (
+      <View style={styles.stickerItem}>
+        <AnimatedSticker
+          sticker={{
+            ...item,
+            is_animated: isAnimated,
+            is_video: isVideo,
+          }}
+          style={styles.stickerImage}
+          resizeMode="contain"
+          playing={true}
+          source="telegram"
+        />
+        {(isAnimated || isVideo) && (
+          <View style={styles.animatedBadgeSmall}>
+            <Text style={styles.animatedBadgeText}>
+              {isVideo ? "▶" : "✦"}
+            </Text>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   return (
     <View style={styles.container}>
@@ -449,6 +468,22 @@ const styles = StyleSheet.create({
   stickerImage: {
     width: "100%",
     height: "100%",
+  },
+  animatedBadgeSmall: {
+    position: "absolute",
+    bottom: 4,
+    right: 4,
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "rgba(108, 99, 255, 0.9)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  animatedBadgeText: {
+    color: "#fff",
+    fontSize: 10,
+    fontWeight: "bold",
   },
   placeholderContainer: {
     flex: 1,

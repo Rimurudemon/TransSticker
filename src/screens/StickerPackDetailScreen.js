@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  Image,
   TouchableOpacity,
   ActivityIndicator,
   Alert,
@@ -12,6 +11,7 @@ import {
 import { useStickers } from "../context/StickerContext";
 import TelegramService from "../services/TelegramService";
 import StickerConverter from "../utils/StickerConverter";
+import AnimatedSticker from "../components/AnimatedSticker";
 
 export default function StickerPackDetailScreen({ route, navigation }) {
   const { pack } = route.params;
@@ -181,15 +181,25 @@ export default function StickerPackDetailScreen({ route, navigation }) {
     const isSelected = selectedStickers.includes(item.file_id);
     const isAnimated = pack.is_animated || item.is_animated;
     const isVideo = pack.is_video || item.is_video;
+    
+    // Determine source: if localPath exists, it's a saved sticker; otherwise from Telegram
+    const source = item.localPath ? "local" : "telegram";
+    
     return (
       <TouchableOpacity
         style={[styles.stickerItem, isSelected && styles.stickerSelected]}
         onPress={() => toggleSticker(item.file_id)}
       >
-        <Image
-          source={{ uri: item.thumbnail || item.file_url }}
+        <AnimatedSticker
+          sticker={{
+            ...item,
+            is_animated: isAnimated,
+            is_video: isVideo,
+          }}
           style={styles.stickerImage}
           resizeMode="contain"
+          playing={true}
+          source={source}
         />
         {(isAnimated || isVideo) && (
           <View style={styles.animatedIndicator}>
