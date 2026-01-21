@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -7,11 +7,16 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  ScrollView,
 } from "react-native";
 import { useStickers } from "../context/StickerContext";
 import TelegramService from "../services/TelegramService";
 import StickerConverter from "../utils/StickerConverter";
 import AnimatedSticker from "../components/AnimatedSticker";
+
+// WhatsApp sticker pack constraints
+const WHATSAPP_MIN_STICKERS = 3;
+const WHATSAPP_MAX_STICKERS = 30;
 
 export default function StickerPackDetailScreen({ route, navigation }) {
   const { pack } = route.params;
@@ -21,6 +26,94 @@ export default function StickerPackDetailScreen({ route, navigation }) {
   );
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
+
+  // Calculate validation state based on selected stickers
+  const validationState = useMemo(() => {
+    const selectedStickerData = pack.stickers?.filter((s) =>
+      selectedStickers.includes(s.file_id)
+    ) || [];
+
+    const count = selectedStickerData.length;
+
+    // Check for static vs animated mix
+    let staticCount = 0;
+    let animatedCount = 0;
+
+    selectedStickerData.forEach((sticker) => {
+      const isAnimated = pack.is_animated || pack.is_video || sticker.is_animated || sticker.is_video;
+      if (isAnimated) {
+        animatedCount++;
+      } else {
+        staticCount++;
+      }
+    });
+
+    const hasMixedTypes = staticCount > 0 && animatedCount > 0;
+    const isBelowMinimum = count > 0 && count < WHATSAPP_MIN_STICKERS;
+    const isAboveMaximum = count > WHATSAPP_MAX_STICKERS;
+    const needsSplitting = count > WHATSAPP_MAX_STICKERS && !hasMixedTypes;
+
+    // Calculate how packs would be split
+    let packSplitInfo = null;
+    if (needsSplitting) {
+      const numPacks = Math.ceil(count / WHATSAPP_MAX_STICKERS);
+      const packSizes = [];
+      let remaining = count;
+      for (let i = 0; i < numPacks; i++) {
+        const size = Math.min(remaining, WHATSAPP_MAX_STICKERS);
+        packSizes.push(size);
+        remaining -= size;
+      }
+      packSplitInfo = { numPacks, packSizes };
+    }
+
+    return {
+      count,
+      staticCount,
+      animatedCount,
+      hasMixedTypes,
+      isBelowMinimum,
+      isAboveMaximum,
+      needsSplitting,
+      packSplitInfo,
+      isValid: count >= WHATSAPP_MIN_STICKERS && !hasMixedTypes,
+    };
+  }, [selectedStickers, pack.stickers, pack.is_animated, pack.is_video]);
+
+  // Get warning messages
+  const getWarnings = () => {
+    const warnings = [];
+
+    if (validationState.isBelowMinimum) {
+      warnings.push({
+        type: "error",
+        icon: "⚠️",
+        title: "Too Few Stickers",
+        message: `WhatsApp requires at least ${WHATSAPP_MIN_STICKERS} stickers per pack. You have selected ${validationState.count}. Please select ${WHATSAPP_MIN_STICKERS - validationState.count} more.`,
+      });
+    }
+
+    if (validationState.hasMixedTypes) {
+      warnings.push({
+        type: "error",
+        icon: "🚫",
+        title: "Mixed Sticker Types",
+        message: `WhatsApp packs cannot contain both static and animated stickers. You have ${validationState.staticCount} static and ${validationState.animatedCount} animated stickers selected. Please choose only one type.`,
+      });
+    }
+
+    if (validationState.needsSplitting && validationState.packSplitInfo) {
+      const { numPacks, packSizes } = validationState.packSplitInfo;
+      warnings.push({
+        type: "info",
+        icon: "📦",
+        title: "Multiple Packs Will Be Created",
+        message: `You selected ${validationState.count} stickers (max ${WHATSAPP_MAX_STICKERS} per pack). This will create ${numPacks} packs with ${packSizes.join(", ")} stickers respectively.`,
+      });
+    }
+
+    return warnings;
+  };
 
   const toggleSticker = (fileId) => {
     setSelectedStickers((prev) => {
@@ -49,10 +142,18 @@ export default function StickerPackDetailScreen({ route, navigation }) {
       return;
     }
 
-    if (selectedStickers.length < 3) {
+    if (validationState.isBelowMinimum) {
       Alert.alert(
         "Minimum Stickers Required",
-        "WhatsApp requires at least 3 stickers per pack. Please select more stickers.",
+        `WhatsApp requires at least ${WHATSAPP_MIN_STICKERS} stickers per pack. Please select ${WHATSAPP_MIN_STICKERS - validationState.count} more stickers.`,
+      );
+      return;
+    }
+
+    if (validationState.hasMixedTypes) {
+      Alert.alert(
+        "Mixed Sticker Types Not Allowed",
+        `WhatsApp packs cannot contain both static and animated stickers. You have ${validationState.staticCount} static and ${validationState.animatedCount} animated stickers selected. Please choose only one type.`,
       );
       return;
     }
@@ -133,39 +234,96 @@ export default function StickerPackDetailScreen({ route, navigation }) {
         throw new Error("Failed to download or convert any stickers");
       }
 
-      // Create tray icon from first sticker
-      const trayIconPath = await converter.createTrayIcon(
-        downloadedStickers[0].localPath,
-      );
+      // Check if we need to split into multiple packs
+      const needsSplit = downloadedStickers.length > WHATSAPP_MAX_STICKERS;
+      const savedPacks = [];
 
-      // Save the pack
-      const savedPack = await savePack({
-        name: pack.name,
-        title: pack.title,
-        stickers: downloadedStickers,
-        trayIcon: trayIconPath,
-        source: "telegram",
-        originalPackName: pack.name,
-        isAnimated: hasAnimatedSticker || hasVideoSticker,
-        is_animated: hasAnimatedSticker,
-        is_video: hasVideoSticker,
-      });
+      if (needsSplit) {
+        // Split stickers into multiple packs
+        const numPacks = Math.ceil(downloadedStickers.length / WHATSAPP_MAX_STICKERS);
+        
+        for (let packIndex = 0; packIndex < numPacks; packIndex++) {
+          const startIdx = packIndex * WHATSAPP_MAX_STICKERS;
+          const endIdx = Math.min(startIdx + WHATSAPP_MAX_STICKERS, downloadedStickers.length);
+          const packStickers = downloadedStickers.slice(startIdx, endIdx);
 
-      Alert.alert(
-        "Pack Saved!",
-        `Successfully downloaded ${downloadedStickers.length} stickers. Ready to export to WhatsApp!`,
-        [
-          {
-            text: "Export Now",
-            onPress: () =>
-              navigation.navigate("WhatsAppExport", { pack: savedPack }),
-          },
-          {
-            text: "Later",
-            onPress: () => navigation.navigate("Home"),
-          },
-        ],
-      );
+          // Create tray icon from first sticker of this sub-pack
+          const trayIconPath = await converter.createTrayIcon(
+            packStickers[0].localPath,
+          );
+
+          // Save the sub-pack with a numbered suffix
+          const packSuffix = numPacks > 1 ? ` (Part ${packIndex + 1})` : "";
+          const savedPack = await savePack({
+            name: `${pack.name}_part${packIndex + 1}`,
+            title: `${pack.title}${packSuffix}`,
+            stickers: packStickers,
+            trayIcon: trayIconPath,
+            source: "telegram",
+            originalPackName: pack.name,
+            isAnimated: hasAnimatedSticker || hasVideoSticker,
+            is_animated: hasAnimatedSticker,
+            is_video: hasVideoSticker,
+          });
+
+          savedPacks.push(savedPack);
+        }
+
+        Alert.alert(
+          "Packs Saved!",
+          `Successfully downloaded ${downloadedStickers.length} stickers and split them into ${savedPacks.length} packs (max ${WHATSAPP_MAX_STICKERS} per pack).\n\nPack sizes: ${savedPacks.map(p => p.stickers.length).join(", ")} stickers.\n\nReady to export to WhatsApp!`,
+          [
+            {
+              text: "Export Now",
+              onPress: () =>
+                navigation.navigate("WhatsAppExport", { 
+                  pack: savedPacks[0], 
+                  allPacks: savedPacks,
+                  currentPackIndex: 0
+                }),
+            },
+            {
+              text: "Later",
+              onPress: () => navigation.navigate("Home"),
+            },
+          ],
+        );
+      } else {
+        // Single pack case
+        // Create tray icon from first sticker
+        const trayIconPath = await converter.createTrayIcon(
+          downloadedStickers[0].localPath,
+        );
+
+        // Save the pack
+        const savedPack = await savePack({
+          name: pack.name,
+          title: pack.title,
+          stickers: downloadedStickers,
+          trayIcon: trayIconPath,
+          source: "telegram",
+          originalPackName: pack.name,
+          isAnimated: hasAnimatedSticker || hasVideoSticker,
+          is_animated: hasAnimatedSticker,
+          is_video: hasVideoSticker,
+        });
+
+        Alert.alert(
+          "Pack Saved!",
+          `Successfully downloaded ${downloadedStickers.length} stickers. Ready to export to WhatsApp!`,
+          [
+            {
+              text: "Export Now",
+              onPress: () =>
+                navigation.navigate("WhatsAppExport", { pack: savedPack }),
+            },
+            {
+              text: "Later",
+              onPress: () => navigation.navigate("Home"),
+            },
+          ],
+        );
+      }
     } catch (error) {
       console.error("Error downloading stickers:", error);
       Alert.alert(
@@ -238,6 +396,32 @@ export default function StickerPackDetailScreen({ route, navigation }) {
         </View>
       </View>
 
+      {/* Warning Banners */}
+      {getWarnings().length > 0 && (
+        <View style={styles.warningsContainer}>
+          {getWarnings().map((warning, index) => (
+            <View
+              key={index}
+              style={[
+                styles.warningBanner,
+                warning.type === "error" ? styles.warningError : styles.warningInfo,
+              ]}
+            >
+              <Text style={styles.warningIcon}>{warning.icon}</Text>
+              <View style={styles.warningContent}>
+                <Text style={[
+                  styles.warningTitle,
+                  warning.type === "error" ? styles.warningTitleError : styles.warningTitleInfo,
+                ]}>
+                  {warning.title}
+                </Text>
+                <Text style={styles.warningMessage}>{warning.message}</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
       <FlatList
         data={pack.stickers || []}
         renderItem={renderSticker}
@@ -259,19 +443,21 @@ export default function StickerPackDetailScreen({ route, navigation }) {
         <TouchableOpacity
           style={[
             styles.downloadButton,
-            selectedStickers.length < 3 && styles.downloadButtonDisabled,
+            !validationState.isValid && styles.downloadButtonDisabled,
           ]}
           onPress={downloadAndSave}
-          disabled={selectedStickers.length < 3}
+          disabled={!validationState.isValid}
         >
           <Text style={styles.downloadButtonText}>
-            Download & Save ({selectedStickers.length} stickers)
+            {validationState.needsSplitting
+              ? `Download & Save (${validationState.count} stickers → ${validationState.packSplitInfo?.numPacks} packs)`
+              : `Download & Save (${selectedStickers.length} stickers)`}
           </Text>
         </TouchableOpacity>
       )}
 
       <Text style={styles.noteText}>
-        * WhatsApp requires mnimum 3 stickers per pack
+        * WhatsApp: min {WHATSAPP_MIN_STICKERS}, max {WHATSAPP_MAX_STICKERS} stickers • No mixing static/animated
       </Text>
     </View>
   );
@@ -427,5 +613,50 @@ const styles = StyleSheet.create({
     color: "#000",
     fontSize: 10,
     fontWeight: "bold",
+  },
+  // Warning banner styles
+  warningsContainer: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  warningBanner: {
+    flexDirection: "row",
+    padding: 12,
+    borderRadius: 8,
+    marginBottom: 8,
+    alignItems: "flex-start",
+  },
+  warningError: {
+    backgroundColor: "rgba(255, 82, 82, 0.15)",
+    borderLeftWidth: 4,
+    borderLeftColor: "#FF5252",
+  },
+  warningInfo: {
+    backgroundColor: "rgba(108, 99, 255, 0.15)",
+    borderLeftWidth: 4,
+    borderLeftColor: "#6C63FF",
+  },
+  warningIcon: {
+    fontSize: 20,
+    marginRight: 12,
+  },
+  warningContent: {
+    flex: 1,
+  },
+  warningTitle: {
+    fontSize: 14,
+    fontWeight: "bold",
+    marginBottom: 4,
+  },
+  warningTitleError: {
+    color: "#FF5252",
+  },
+  warningTitleInfo: {
+    color: "#6C63FF",
+  },
+  warningMessage: {
+    color: "#aaa",
+    fontSize: 12,
+    lineHeight: 18,
   },
 });

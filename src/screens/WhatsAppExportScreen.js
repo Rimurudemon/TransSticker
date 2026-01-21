@@ -22,16 +22,30 @@ const whatsappService = new WhatsAppService();
 const stickerConverter = new StickerConverter();
 
 export default function WhatsAppExportScreen({ route, navigation }) {
-  const { pack } = route.params;
+  // Support both single pack and multiple packs
+  const { pack: initialPack, allPacks, currentPackIndex: initialIndex } = route.params;
+  
+  const [currentPackIndex, setCurrentPackIndex] = useState(initialIndex || 0);
+  const packs = allPacks || [initialPack];
+  const pack = packs[currentPackIndex];
+  const totalPacks = packs.length;
+  const hasMultiplePacks = totalPacks > 1;
+
   const [packName, setPackName] = useState(pack.title || "My Sticker Pack");
   const [author, setAuthor] = useState("TransSticker");
   const [exporting, setExporting] = useState(false);
   const [nativeModuleAvailable, setNativeModuleAvailable] = useState(false);
+  const [exportedPacks, setExportedPacks] = useState([]);
 
   useEffect(() => {
     // Check if native module is available
     setNativeModuleAvailable(whatsappService.isNativeModuleAvailable());
   }, []);
+
+  // Update pack name when switching packs
+  useEffect(() => {
+    setPackName(pack.title || "My Sticker Pack");
+  }, [currentPackIndex, pack.title]);
 
   const exportToWhatsApp = async () => {
     if (!packName.trim()) {
@@ -122,11 +136,39 @@ export default function WhatsAppExportScreen({ route, navigation }) {
       // Add to WhatsApp
       await whatsappService.addPackToWhatsApp(identifier, packName.trim());
 
-      Alert.alert(
-        "Success!",
-        "Sticker pack has been sent to WhatsApp. Follow the prompts in WhatsApp to add it.",
-        [{ text: "OK" }],
+      // Mark this pack as exported (only if not already exported)
+      setExportedPacks(prev => 
+        prev.includes(currentPackIndex) ? prev : [...prev, currentPackIndex]
       );
+
+      // Check if there are more packs to export
+      if (hasMultiplePacks && currentPackIndex < totalPacks - 1) {
+        Alert.alert(
+          `Pack ${currentPackIndex + 1} of ${totalPacks} Exported! ✅`,
+          `"${packName}" has been sent to WhatsApp.\n\nReady to export the next pack?`,
+          [
+            {
+              text: "Export Next Pack",
+              onPress: () => setCurrentPackIndex(currentPackIndex + 1),
+            },
+            {
+              text: "Done for Now",
+              onPress: () => navigation.navigate("Home"),
+              style: "cancel",
+            },
+          ],
+        );
+      } else {
+        const successMessage = hasMultiplePacks
+          ? `All ${totalPacks} sticker packs have been sent to WhatsApp!`
+          : "Sticker pack has been sent to WhatsApp.";
+        
+        Alert.alert(
+          "Success! 🎉",
+          `${successMessage} Follow the prompts in WhatsApp to add them.`,
+          [{ text: "OK", onPress: () => navigation.navigate("Home") }],
+        );
+      }
     } catch (error) {
       console.error("Native export error:", error);
       throw error;
@@ -234,6 +276,69 @@ export default function WhatsAppExportScreen({ route, navigation }) {
 
   return (
     <View style={styles.container}>
+      {/* Multi-pack indicator */}
+      {hasMultiplePacks && (
+        <View style={styles.multiPackHeader}>
+          <View style={styles.multiPackInfo}>
+            <Text style={styles.multiPackTitle}>
+              📦 Pack {currentPackIndex + 1} of {totalPacks}
+            </Text>
+            <Text style={styles.multiPackSubtitle}>
+              {exportedPacks.length} exported • {totalPacks - exportedPacks.length} remaining
+            </Text>
+          </View>
+          
+          {/* Pack navigation */}
+          <View style={styles.packNavigation}>
+            <TouchableOpacity
+              style={[
+                styles.packNavButton,
+                currentPackIndex === 0 && styles.packNavButtonDisabled,
+              ]}
+              onPress={() => setCurrentPackIndex(Math.max(0, currentPackIndex - 1))}
+              disabled={currentPackIndex === 0}
+            >
+              <Text style={styles.packNavButtonText}>◀ Prev</Text>
+            </TouchableOpacity>
+
+            <View style={styles.packDotsContainer}>
+              {packs.map((p, index) => (
+                <TouchableOpacity
+                  key={index}
+                  onPress={() => setCurrentPackIndex(index)}
+                  style={[
+                    styles.packDot,
+                    index === currentPackIndex && styles.packDotActive,
+                    exportedPacks.includes(index) && styles.packDotExported,
+                  ]}
+                >
+                  {exportedPacks.includes(index) ? (
+                    <Text style={styles.packDotCheck}>✓</Text>
+                  ) : (
+                    <Text style={styles.packDotNumber}>{index + 1}</Text>
+                  )}
+                </TouchableOpacity>
+              ))}
+            </View>
+
+            <TouchableOpacity
+              style={[
+                styles.packNavButton,
+                currentPackIndex === totalPacks - 1 && styles.packNavButtonDisabled,
+              ]}
+              onPress={() => setCurrentPackIndex(Math.min(totalPacks - 1, currentPackIndex + 1))}
+              disabled={currentPackIndex === totalPacks - 1}
+            >
+              <Text style={styles.packNavButtonText}>Next ▶</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.packSelectHint}>
+            Tap a pack number to select it, or use Prev/Next buttons
+          </Text>
+        </View>
+      )}
+
       <View style={styles.formContainer}>
         <Text style={styles.label}>Pack Name</Text>
         <TextInput
@@ -294,13 +399,19 @@ export default function WhatsAppExportScreen({ route, navigation }) {
         ) : (
           <>
             <Text style={styles.exportButtonIcon}>📤</Text>
-            <Text style={styles.exportButtonText}>Export to WhatsApp</Text>
+            <Text style={styles.exportButtonText}>
+              {hasMultiplePacks
+                ? `Export Pack ${currentPackIndex + 1} to WhatsApp`
+                : "Export to WhatsApp"}
+            </Text>
           </>
         )}
       </TouchableOpacity>
 
       <Text style={styles.noteText}>
-        Make sure WhatsApp is installed on your device
+        {hasMultiplePacks
+          ? `Exporting pack ${currentPackIndex + 1} of ${totalPacks} • Make sure WhatsApp is installed`
+          : "Make sure WhatsApp is installed on your device"}
       </Text>
     </View>
   );
@@ -411,5 +522,87 @@ const styles = StyleSheet.create({
     textAlign: "center",
     color: "#666",
     fontSize: 12,
+  },
+  // Multi-pack styles
+  multiPackHeader: {
+    backgroundColor: "rgba(108, 99, 255, 0.15)",
+    padding: 12,
+    marginHorizontal: 16,
+    marginTop: 12,
+    borderRadius: 10,
+    borderLeftWidth: 4,
+    borderLeftColor: "#6C63FF",
+  },
+  multiPackInfo: {
+    marginBottom: 10,
+  },
+  multiPackTitle: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "bold",
+  },
+  multiPackSubtitle: {
+    color: "#aaa",
+    fontSize: 12,
+    marginTop: 4,
+  },
+  packNavigation: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 8,
+  },
+  packNavButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    backgroundColor: "#2d2d44",
+    borderRadius: 6,
+  },
+  packNavButtonDisabled: {
+    opacity: 0.4,
+  },
+  packNavButtonText: {
+    color: "#6C63FF",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  packDotsContainer: {
+    flexDirection: "row",
+    gap: 8,
+    flex: 1,
+    justifyContent: "center",
+  },
+  packDot: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: "#3d3d5c",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  packDotActive: {
+    backgroundColor: "#6C63FF",
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
+  packDotExported: {
+    backgroundColor: "#25D366",
+  },
+  packDotNumber: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  packDotCheck: {
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "bold",
+  },
+  packSelectHint: {
+    color: "#888",
+    fontSize: 11,
+    textAlign: "center",
+    marginTop: 10,
+    fontStyle: "italic",
   },
 });
