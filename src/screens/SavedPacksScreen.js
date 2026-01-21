@@ -4,11 +4,11 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  Image,
   TouchableOpacity,
   Alert,
 } from "react-native";
 import { useStickers } from "../context/StickerContext";
+import AnimatedSticker from "../components/AnimatedSticker";
 
 export default function SavedPacksScreen({ navigation }) {
   const { savedPacks, removePack } = useStickers();
@@ -30,7 +30,7 @@ export default function SavedPacksScreen({ navigation }) {
             }
           },
         },
-      ]
+      ],
     );
   };
 
@@ -41,11 +41,17 @@ export default function SavedPacksScreen({ navigation }) {
     >
       <View style={styles.packPreview}>
         {item.stickers?.slice(0, 4).map((sticker, index) => (
-          <Image
+          <AnimatedSticker
             key={sticker.file_id || index}
-            source={{ uri: sticker.localPath || sticker.thumbnail }}
+            sticker={{
+              ...sticker,
+              is_animated: item.is_animated || sticker.is_animated,
+              is_video: item.is_video || sticker.is_video,
+            }}
             style={styles.previewSticker}
             resizeMode="contain"
+            playing={true}
+            source="local"
           />
         ))}
       </View>

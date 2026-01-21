@@ -30,7 +30,7 @@ export default function TelegramStickersScreen({ navigation }) {
     if (!input) return "";
     // Handle full URLs like https://t.me/addstickers/PackName
     const urlMatch = input.match(
-      /(?:t\.me\/addstickers\/|telegram\.me\/addstickers\/)([a-zA-Z0-9_]+)/
+      /(?:t\.me\/addstickers\/|telegram\.me\/addstickers\/)([a-zA-Z0-9_]+)/,
     );
     if (urlMatch) {
       return urlMatch[1];
@@ -59,7 +59,7 @@ export default function TelegramStickersScreen({ navigation }) {
             text: "Go to Settings",
             onPress: () => navigation.navigate("Settings"),
           },
-        ]
+        ],
       );
       return;
     }
@@ -90,7 +90,7 @@ export default function TelegramStickersScreen({ navigation }) {
       console.error("Error fetching sticker pack:", err);
       setError(
         err.message ||
-          "Failed to fetch sticker pack. Please check the pack name."
+          "Failed to fetch sticker pack. Please check the pack name.",
       );
     } finally {
       setLoading(false);

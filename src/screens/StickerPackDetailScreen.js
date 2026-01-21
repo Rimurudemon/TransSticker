@@ -17,7 +17,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
   const { pack } = route.params;
   const { telegramBotToken, savePack } = useStickers();
   const [selectedStickers, setSelectedStickers] = useState(
-    pack.stickers?.map((s) => s.file_id) || []
+    pack.stickers?.map((s) => s.file_id) || [],
   );
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -44,7 +44,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
     if (selectedStickers.length === 0) {
       Alert.alert(
         "No Stickers Selected",
-        "Please select at least one sticker to download."
+        "Please select at least one sticker to download.",
       );
       return;
     }
@@ -52,7 +52,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
     if (selectedStickers.length < 3) {
       Alert.alert(
         "Minimum Stickers Required",
-        "WhatsApp requires at least 3 stickers per pack. Please select more stickers."
+        "WhatsApp requires at least 3 stickers per pack. Please select more stickers.",
       );
       return;
     }
@@ -65,7 +65,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
       const converter = new StickerConverter();
 
       const selectedStickerData = pack.stickers.filter((s) =>
-        selectedStickers.includes(s.file_id)
+        selectedStickers.includes(s.file_id),
       );
 
       const downloadedStickers = [];
@@ -93,12 +93,12 @@ export default function StickerPackDetailScreen({ route, navigation }) {
           else if (isVideoSticker) extension = "webm";
 
           console.log(
-            `Sticker ${i}: isAnimated=${isAnimatedSticker}, isVideo=${isVideoSticker}, extension=${extension}`
+            `Sticker ${i}: isAnimated=${isAnimatedSticker}, isVideo=${isVideoSticker}, extension=${extension}`,
           );
 
           const localPath = await telegramService.downloadFile(
             fileUrl,
-            `${pack.name}_${sticker.file_unique_id}.${extension}`
+            `${pack.name}_${sticker.file_unique_id}.${extension}`,
           );
 
           console.log(`Downloaded sticker to: ${localPath}`);
@@ -108,7 +108,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
           try {
             convertedPath = await converter.convertToWhatsAppFormat(
               localPath,
-              isAnimatedSticker || isVideoSticker
+              isAnimatedSticker || isVideoSticker,
             );
             console.log(`Converted sticker to: ${convertedPath}`);
 
@@ -120,7 +120,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
           } catch (convErr) {
             console.error(
               `Conversion failed for sticker ${i}, skipping:`,
-              convErr
+              convErr,
             );
             // Continue loop, just don't add to downloadedStickers
           }
@@ -135,7 +135,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
 
       // Create tray icon from first sticker
       const trayIconPath = await converter.createTrayIcon(
-        downloadedStickers[0].localPath
+        downloadedStickers[0].localPath,
       );
 
       // Save the pack
@@ -164,13 +164,13 @@ export default function StickerPackDetailScreen({ route, navigation }) {
             text: "Later",
             onPress: () => navigation.navigate("Home"),
           },
-        ]
+        ],
       );
     } catch (error) {
       console.error("Error downloading stickers:", error);
       Alert.alert(
         "Download Failed",
-        error.message || "Failed to download stickers. Please try again."
+        error.message || "Failed to download stickers. Please try again.",
       );
     } finally {
       setDownloading(false);

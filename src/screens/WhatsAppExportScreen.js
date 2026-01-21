@@ -4,7 +4,6 @@ import {
   Text,
   StyleSheet,
   FlatList,
-  Image,
   TouchableOpacity,
   TextInput,
   Alert,
@@ -17,6 +16,7 @@ import * as Sharing from "expo-sharing";
 import * as FileSystem from "expo-file-system/legacy";
 import WhatsAppService from "../services/WhatsAppService";
 import StickerConverter from "../utils/StickerConverter";
+import AnimatedSticker from "../components/AnimatedSticker";
 
 const whatsappService = new WhatsAppService();
 const stickerConverter = new StickerConverter();
@@ -37,7 +37,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
     if (!packName.trim()) {
       Alert.alert(
         "Pack Name Required",
-        "Please enter a name for your sticker pack."
+        "Please enter a name for your sticker pack.",
       );
       return;
     }
@@ -45,7 +45,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
     if (pack.stickers.length < 3) {
       Alert.alert(
         "Not Enough Stickers",
-        "WhatsApp requires at least 3 stickers per pack."
+        "WhatsApp requires at least 3 stickers per pack.",
       );
       return;
     }
@@ -64,7 +64,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
       console.error("Export error:", error);
       Alert.alert(
         "Export Failed",
-        error.message || "Failed to export stickers. Please try again."
+        error.message || "Failed to export stickers. Please try again.",
       );
     } finally {
       setExporting(false);
@@ -83,7 +83,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
       if (firstSticker?.localPath) {
         // Use the first sticker as tray icon, resized to 96x96
         trayImagePath = await stickerConverter.createTrayIcon(
-          firstSticker.localPath
+          firstSticker.localPath,
         );
       } else {
         throw new Error("No stickers available to create tray icon");
@@ -98,7 +98,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
       // Determine if pack is animated by checking stickers
       // Some saved packs might not have the isAnimated flag at root level
       const hasAnimatedStickers = pack.stickers.some(
-        (s) => s.is_animated || s.is_video
+        (s) => s.is_animated || s.is_video,
       );
       const isAnimatedPack =
         pack.isAnimated ||
@@ -125,7 +125,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
       Alert.alert(
         "Success!",
         "Sticker pack has been sent to WhatsApp. Follow the prompts in WhatsApp to add it.",
-        [{ text: "OK" }]
+        [{ text: "OK" }],
       );
     } catch (error) {
       console.error("Native export error:", error);
@@ -164,7 +164,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
             style: "cancel",
           },
           { text: "Try Sharing", onPress: () => shareStickers() },
-        ]
+        ],
       );
       return;
     }
@@ -186,7 +186,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
           text: "Cancel",
           style: "cancel",
         },
-      ]
+      ],
     );
   };
 
@@ -196,7 +196,7 @@ export default function WhatsAppExportScreen({ route, navigation }) {
       if (!isAvailable) {
         Alert.alert(
           "Sharing Not Available",
-          "Sharing is not available on this device."
+          "Sharing is not available on this device.",
         );
         return;
       }
@@ -217,10 +217,16 @@ export default function WhatsAppExportScreen({ route, navigation }) {
 
   const renderSticker = ({ item, index }) => (
     <View style={styles.stickerItem}>
-      <Image
-        source={{ uri: item.localPath || item.thumbnail }}
+      <AnimatedSticker
+        sticker={{
+          ...item,
+          is_animated: pack.is_animated || item.is_animated,
+          is_video: pack.is_video || item.is_video,
+        }}
         style={styles.stickerImage}
         resizeMode="contain"
+        playing={true}
+        source="local"
       />
       <Text style={styles.stickerNumber}>{index + 1}</Text>
     </View>
