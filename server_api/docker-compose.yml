@@ -2,13 +2,32 @@ version: "3.8"
 
 services:
   sticker-converter:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Use BuildKit for faster builds with better caching
+      args:
+        BUILDKIT_INLINE_CACHE: 1
+    image: sticker-converter:latest
     container_name: sticker_converter_api
     ports:
-      - "8201:8201"
+      - "8202:8202"
     restart: unless-stopped
     volumes:
+      # Mount server.js directly - changes apply with just down/up (no rebuild!)
+      - ./server.js:/app/server.js:ro
+      # Mount uploads and temp directories for persistence
       - ./uploads:/app/uploads
-    shm_size: "1gb"
+      - ./temp:/app/temp
+    # Increased shared memory for Chromium/Puppeteer
+    shm_size: "2gb"
     environment:
       - NODE_ENV=production
+      - PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    # Health check to monitor the service
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8202/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s

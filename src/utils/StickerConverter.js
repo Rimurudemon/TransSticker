@@ -14,7 +14,7 @@ import { Platform } from "react-native";
 //   default: "http://172.23.181.174:8203",
 // });
 // Uncomment this line for production:
-const API_BASE_URL = "https://sticker-api.iitmandi.co.in/";
+const API_BASE_URL = "https://sticker-api.iitmandi.co.in";
 
 // WhatsApp sticker requirements
 const WHATSAPP_STICKER_SIZE = 512;

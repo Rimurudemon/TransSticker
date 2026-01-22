@@ -634,7 +634,7 @@ app.post("/convert-batch", BATCH_UPLOAD, async (req, res) => {
 });
 
 // Start Server
-const PORT = 8203;
+const PORT = process.env.PORT || 8202;
 app.listen(PORT, () => {
   console.log(`Sticker Converter running on port ${PORT}`);
   console.log(`- Single conversion: POST /convert`);
