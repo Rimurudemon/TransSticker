@@ -1,5 +1,20 @@
 import * as ImageManipulator from "expo-image-manipulator";
 import * as FileSystem from "expo-file-system/legacy";
+import { Platform } from "react-native";
+
+// API Configuration
+// For local development:
+// - Android Emulator: use 10.0.2.2 (maps to host machine's localhost)
+// - iOS Simulator: use localhost
+// - Physical Device: use your computer's IP address (e.g., 192.168.x.x)
+// For production: use "https://sticker-api.iitmandi.co.in"
+// const API_BASE_URL = Platform.select({
+//   android: "http://172.23.181.174:8203", // Android emulator -> host localhost
+//   ios: "http://localhost:8203",    // iOS simulator
+//   default: "http://172.23.181.174:8203",
+// });
+// Uncomment this line for production:
+const API_BASE_URL = "https://sticker-api.iitmandi.co.in/";
 
 // WhatsApp sticker requirements
 const WHATSAPP_STICKER_SIZE = 512;
@@ -74,7 +89,7 @@ export default class StickerConverter {
       const timeoutId = setTimeout(() => controller.abort(), 120000);
 
       const response = await fetch(
-        "https://sticker-api.iitmandi.co.in/convert",
+        `${API_BASE_URL}/convert`,
         {
           method: "POST",
           body: formData,
@@ -267,30 +282,168 @@ export default class StickerConverter {
   }
 
   /**
-   * Batch convert multiple stickers
+   * Convert multiple animated stickers via batch API
+   * @param {Array} inputPaths - Array of sticker file paths
+   * @param {Function} onProgress - Progress callback (0-1)
+   * @returns {Array} Array of {original, converted, success, error}
    */
-  async convertBatch(inputPaths, onProgress) {
-    const results = [];
-    const total = inputPaths.length;
+  async convertAnimatedBatch(inputPaths, onProgress) {
+    await this.initOutputDir();
 
-    for (let i = 0; i < total; i++) {
-      try {
-        const convertedPath = await this.convertToWhatsAppFormat(inputPaths[i]);
-        results.push({
-          original: inputPaths[i],
-          converted: convertedPath,
-          success: true,
-        });
-      } catch (error) {
-        results.push({
-          original: inputPaths[i],
-          error: error.message,
-          success: false,
-        });
+    const formData = new FormData();
+    
+    for (const inputPath of inputPaths) {
+      const lowerPath = inputPath.toLowerCase();
+      let mimeType = "application/gzip";
+      let fileName = "sticker.tgs";
+      
+      if (lowerPath.endsWith(".webm")) {
+        mimeType = "video/webm";
+        fileName = `sticker_${Date.now()}.webm`;
+      } else if (lowerPath.endsWith(".tgs")) {
+        fileName = `sticker_${Date.now()}.tgs`;
       }
 
+      formData.append("stickers", {
+        uri: inputPath,
+        name: fileName,
+        type: mimeType,
+      });
+    }
+
+    try {
+      console.log(`Sending ${inputPaths.length} stickers to batch conversion API...`);
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout for batch
+
+      const response = await fetch(
+        `${API_BASE_URL}/convert-batch`,
+        {
+          method: "POST",
+          body: formData,
+          signal: controller.signal,
+        }
+      );
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(`Batch API failed: ${response.status} - ${errorText}`);
+      }
+
+      const batchResult = await response.json();
+      console.log(`Batch conversion complete: ${batchResult.succeeded}/${batchResult.total} in ${batchResult.elapsed}`);
+
+      const results = [];
+      const total = batchResult.results.length;
+
+      for (let i = 0; i < batchResult.results.length; i++) {
+        const result = batchResult.results[i];
+        
+        if (result.success) {
+          try {
+            const filename = `sticker_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.webp`;
+            const outputPath = this.outputDir + filename;
+
+            await FileSystem.writeAsStringAsync(outputPath, result.data, {
+              encoding: FileSystem.EncodingType.Base64,
+            });
+
+            results.push({
+              original: inputPaths[i],
+              converted: outputPath,
+              success: true,
+              sizeKB: result.sizeKB,
+            });
+          } catch (err) {
+            results.push({
+              original: inputPaths[i],
+              error: `Failed to save: ${err.message}`,
+              success: false,
+            });
+          }
+        } else {
+          results.push({
+            original: inputPaths[i],
+            error: result.error,
+            success: false,
+          });
+        }
+
+        if (onProgress) {
+          onProgress((i + 1) / total);
+        }
+      }
+
+      return results;
+    } catch (error) {
+      console.error("Batch conversion failed:", error);
+      // Fall back to parallel individual conversions
+      console.log("Falling back to parallel individual conversions...");
+      return this.convertBatchParallel(inputPaths, onProgress);
+    }
+  }
+
+  /**
+   * Batch convert multiple stickers with parallelism
+   * @param {Array} inputPaths - Array of sticker paths
+   * @param {Function} onProgress - Progress callback (0-1)
+   * @param {Object} options - Options including isAnimated and concurrency
+   */
+  async convertBatch(inputPaths, onProgress, options = {}) {
+    const { isAnimated = false, concurrency = 4, useBatchApi = true } = options;
+
+    // For animated stickers, try batch API first if enabled
+    if (isAnimated && useBatchApi) {
+      try {
+        return await this.convertAnimatedBatch(inputPaths, onProgress);
+      } catch (error) {
+        console.warn("Batch API failed, falling back to parallel conversion:", error.message);
+      }
+    }
+
+    // Use parallel conversion with controlled concurrency
+    return this.convertBatchParallel(inputPaths, onProgress, { isAnimated, concurrency });
+  }
+
+  /**
+   * Convert stickers in parallel with controlled concurrency
+   */
+  async convertBatchParallel(inputPaths, onProgress, options = {}) {
+    const { isAnimated = false, concurrency = 4 } = options;
+    const results = [];
+    const total = inputPaths.length;
+    let completed = 0;
+
+    // Process in chunks for controlled concurrency
+    for (let i = 0; i < total; i += concurrency) {
+      const chunk = inputPaths.slice(i, Math.min(i + concurrency, total));
+      
+      const chunkPromises = chunk.map(async (inputPath) => {
+        try {
+          const convertedPath = await this.convertToWhatsAppFormat(inputPath, isAnimated);
+          return {
+            original: inputPath,
+            converted: convertedPath,
+            success: true,
+          };
+        } catch (error) {
+          return {
+            original: inputPath,
+            error: error.message,
+            success: false,
+          };
+        }
+      });
+
+      const chunkResults = await Promise.all(chunkPromises);
+      results.push(...chunkResults);
+      
+      completed += chunk.length;
       if (onProgress) {
-        onProgress((i + 1) / total);
+        onProgress(completed / total);
       }
     }
 

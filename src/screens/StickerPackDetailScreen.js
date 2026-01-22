@@ -169,14 +169,13 @@ export default function StickerPackDetailScreen({ route, navigation }) {
         selectedStickers.includes(s.file_id),
       );
 
-      const downloadedStickers = [];
+      let downloadedStickers = [];
+      let failedStickers = [];
       let hasAnimatedSticker = false;
       let hasVideoSticker = false;
 
-      for (let i = 0; i < selectedStickerData.length; i++) {
-        const sticker = selectedStickerData[i];
-        setProgress(Math.round(((i + 1) / selectedStickerData.length) * 100));
-
+      // Helper function to download a single sticker
+      const downloadSingleSticker = async (sticker, index) => {
         try {
           // Download the sticker file
           const fileUrl = await telegramService.getFileUrl(sticker.file_id);
@@ -194,7 +193,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
           else if (isVideoSticker) extension = "webm";
 
           console.log(
-            `Sticker ${i}: isAnimated=${isAnimatedSticker}, isVideo=${isVideoSticker}, extension=${extension}`,
+            `Sticker ${index}: isAnimated=${isAnimatedSticker}, isVideo=${isVideoSticker}, extension=${extension}`,
           );
 
           const localPath = await telegramService.downloadFile(
@@ -205,29 +204,113 @@ export default function StickerPackDetailScreen({ route, navigation }) {
           console.log(`Downloaded sticker to: ${localPath}`);
 
           // Convert to WhatsApp format
-          let convertedPath;
-          try {
-            convertedPath = await converter.convertToWhatsAppFormat(
-              localPath,
-              isAnimatedSticker || isVideoSticker,
-            );
-            console.log(`Converted sticker to: ${convertedPath}`);
+          const convertedPath = await converter.convertToWhatsAppFormat(
+            localPath,
+            isAnimatedSticker || isVideoSticker,
+          );
+          console.log(`Converted sticker to: ${convertedPath}`);
 
-            downloadedStickers.push({
+          return {
+            success: true,
+            sticker: {
               ...sticker,
               localPath: convertedPath,
               originalPath: localPath,
-            });
-          } catch (convErr) {
-            console.error(
-              `Conversion failed for sticker ${i}, skipping:`,
-              convErr,
-            );
-            // Continue loop, just don't add to downloadedStickers
-          }
+            },
+          };
         } catch (err) {
-          console.error(`Failed to download sticker ${i}:`, err);
+          console.error(`Failed sticker ${index}:`, err);
+          return {
+            success: false,
+            sticker,
+            error: err.message || "Unknown error",
+          };
         }
+      };
+
+      // First pass - download all stickers
+      for (let i = 0; i < selectedStickerData.length; i++) {
+        const sticker = selectedStickerData[i];
+        setProgress(Math.round(((i + 1) / selectedStickerData.length) * 100));
+
+        const result = await downloadSingleSticker(sticker, i);
+        if (result.success) {
+          downloadedStickers.push(result.sticker);
+        } else {
+          failedStickers.push({ sticker: result.sticker, error: result.error, index: i });
+        }
+      }
+
+      // If there are failed stickers, ask user if they want to retry
+      const retryFailedStickers = async (failed, retryCount = 1) => {
+        return new Promise((resolve) => {
+          const failedCount = failed.length;
+          const failedInfo = failed.slice(0, 3).map(f => 
+            `• Sticker ${f.index + 1}: ${f.error}`
+          ).join("\n");
+          const moreText = failedCount > 3 ? `\n• ...and ${failedCount - 3} more` : "";
+
+          Alert.alert(
+            `${failedCount} Sticker${failedCount > 1 ? "s" : ""} Failed`,
+            `The following stickers failed to download/convert:\n\n${failedInfo}${moreText}\n\nWould you like to retry? (Attempt ${retryCount}/3)`,
+            [
+              {
+                text: "Skip Failed",
+                style: "cancel",
+                onPress: () => resolve({ retry: false, stickers: [] }),
+              },
+              {
+                text: "Retry Failed",
+                onPress: async () => {
+                  const retryResults = [];
+                  for (let i = 0; i < failed.length; i++) {
+                    setProgress(Math.round(((i + 1) / failed.length) * 100));
+                    const result = await downloadSingleSticker(failed[i].sticker, failed[i].index);
+                    retryResults.push(result);
+                  }
+                  resolve({ retry: true, results: retryResults });
+                },
+              },
+            ],
+          );
+        });
+      };
+
+      // Retry loop (max 2 retries)
+      let retryCount = 1;
+      while (failedStickers.length > 0 && retryCount <= 2) {
+        const retryResponse = await retryFailedStickers(failedStickers, retryCount);
+        
+        if (!retryResponse.retry) {
+          break; // User chose to skip
+        }
+
+        // Process retry results
+        const newFailed = [];
+        for (const result of retryResponse.results) {
+          if (result.success) {
+            downloadedStickers.push(result.sticker);
+          } else {
+            const originalFailed = failedStickers.find(f => f.sticker.file_id === result.sticker.file_id);
+            newFailed.push({ 
+              sticker: result.sticker, 
+              error: result.error, 
+              index: originalFailed?.index || 0 
+            });
+          }
+        }
+        
+        failedStickers = newFailed;
+        retryCount++;
+      }
+
+      // Final summary if there are still failed stickers
+      if (failedStickers.length > 0) {
+        Alert.alert(
+          "Some Stickers Skipped",
+          `${failedStickers.length} sticker${failedStickers.length > 1 ? "s" : ""} could not be downloaded and will be skipped.`,
+          [{ text: "OK" }],
+        );
       }
 
       if (downloadedStickers.length === 0) {
