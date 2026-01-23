@@ -29,8 +29,18 @@ const MAX_SIZE_KB = 500;
 const FPS = 20; // Reduced from 30 to save size
 
 // Parallel processing configuration
-const MAX_CONCURRENT_JOBS = 4; // Max parallel conversions per batch request
-const BATCH_UPLOAD = multer({ dest: "uploads/" }).array("stickers", 30); // Max 30 stickers per batch
+const MAX_CONCURRENT_JOBS = 3; // Max parallel conversions per batch request (reduced to avoid memory issues)
+const MAX_BATCH_SIZE = 15; // Max stickers per batch request
+
+// Multer configuration with increased limits for batch uploads
+const multerConfig = multer({
+  dest: "uploads/",
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5MB per file
+    files: MAX_BATCH_SIZE
+  }
+});
+const BATCH_UPLOAD = multerConfig.array("stickers", MAX_BATCH_SIZE);
 
 // Helper: Recursive delete to clean up temp files
 const deleteFolderRecursive = (directoryPath) => {
@@ -584,13 +594,34 @@ async function processWithConcurrency(items, processor, concurrency) {
  * Accepts multipart/form-data with multiple files named 'stickers'
  * Returns JSON array with conversion results
  */
-app.post("/convert-batch", BATCH_UPLOAD, async (req, res) => {
+app.post("/convert-batch", (req, res, next) => {
+  // Handle multer errors (file too large, too many files, etc.)
+  BATCH_UPLOAD(req, res, (err) => {
+    if (err) {
+      console.error("[BATCH] Multer error:", err.message);
+      if (err.code === 'LIMIT_FILE_COUNT') {
+        return res.status(400).json({ 
+          error: `Too many files. Maximum ${MAX_BATCH_SIZE} files per batch.` 
+        });
+      }
+      if (err.code === 'LIMIT_FILE_SIZE') {
+        return res.status(400).json({ 
+          error: "File too large. Maximum 5MB per file." 
+        });
+      }
+      return res.status(400).json({ error: err.message });
+    }
+    next();
+  });
+}, async (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: "No files uploaded." });
   }
 
   const batchId = uuidv4();
-  console.log(`[BATCH-${batchId}] Starting batch conversion of ${req.files.length} stickers with concurrency ${MAX_CONCURRENT_JOBS}`);
+  const fileCount = req.files.length;
+  console.log(`[BATCH-${batchId}] Starting batch conversion of ${fileCount} stickers with concurrency ${MAX_CONCURRENT_JOBS}`);
+  console.log(`[BATCH-${batchId}] File types: ${req.files.map(f => f.originalname?.split('.').pop() || 'unknown').join(', ')}`);
 
   try {
     const startTime = Date.now();

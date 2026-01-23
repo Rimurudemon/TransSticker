@@ -290,100 +290,140 @@ export default class StickerConverter {
   async convertAnimatedBatch(inputPaths, onProgress) {
     await this.initOutputDir();
 
-    const formData = new FormData();
-    
-    for (const inputPath of inputPaths) {
-      const lowerPath = inputPath.toLowerCase();
-      let mimeType = "application/gzip";
-      let fileName = "sticker.tgs";
+    // Split into smaller batches to match server concurrency (3)
+    // Send slightly more than concurrency to keep the server busy
+    const MAX_BATCH_SIZE = 10;
+    const allResults = [];
+    const totalBatches = Math.ceil(inputPaths.length / MAX_BATCH_SIZE);
+
+    console.log(`Processing ${inputPaths.length} animated stickers in ${totalBatches} batch(es)...`);
+
+    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+      const startIdx = batchIndex * MAX_BATCH_SIZE;
+      const endIdx = Math.min(startIdx + MAX_BATCH_SIZE, inputPaths.length);
+      const batchPaths = inputPaths.slice(startIdx, endIdx);
+
+      console.log(`Batch ${batchIndex + 1}/${totalBatches}: Processing ${batchPaths.length} stickers...`);
+
+      const formData = new FormData();
       
-      if (lowerPath.endsWith(".webm")) {
-        mimeType = "video/webm";
-        fileName = `sticker_${Date.now()}.webm`;
-      } else if (lowerPath.endsWith(".tgs")) {
-        fileName = `sticker_${Date.now()}.tgs`;
-      }
-
-      formData.append("stickers", {
-        uri: inputPath,
-        name: fileName,
-        type: mimeType,
-      });
-    }
-
-    try {
-      console.log(`Sending ${inputPaths.length} stickers to batch conversion API...`);
-
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 min timeout for batch
-
-      const response = await fetch(
-        `${API_BASE_URL}/convert-batch`,
-        {
-          method: "POST",
-          body: formData,
-          signal: controller.signal,
-        }
-      );
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        throw new Error(`Batch API failed: ${response.status} - ${errorText}`);
-      }
-
-      const batchResult = await response.json();
-      console.log(`Batch conversion complete: ${batchResult.succeeded}/${batchResult.total} in ${batchResult.elapsed}`);
-
-      const results = [];
-      const total = batchResult.results.length;
-
-      for (let i = 0; i < batchResult.results.length; i++) {
-        const result = batchResult.results[i];
+      for (const inputPath of batchPaths) {
+        const lowerPath = inputPath.toLowerCase();
+        let mimeType = "application/gzip";
+        let fileName = "sticker.tgs";
         
-        if (result.success) {
-          try {
-            const filename = `sticker_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.webp`;
-            const outputPath = this.outputDir + filename;
+        if (lowerPath.endsWith(".webm")) {
+          mimeType = "video/webm";
+          fileName = `sticker_${Date.now()}_${Math.random().toString(36).substr(2, 5)}.webm`;
+        } else if (lowerPath.endsWith(".tgs")) {
+          fileName = `sticker_${Date.now()}_${Math.random().toString(36).substr(2, 5)}.tgs`;
+        }
 
-            await FileSystem.writeAsStringAsync(outputPath, result.data, {
-              encoding: FileSystem.EncodingType.Base64,
-            });
+        formData.append("stickers", {
+          uri: inputPath,
+          name: fileName,
+          type: mimeType,
+        });
+      }
 
-            results.push({
-              original: inputPaths[i],
-              converted: outputPath,
-              success: true,
-              sizeKB: result.sizeKB,
-            });
-          } catch (err) {
-            results.push({
-              original: inputPaths[i],
-              error: `Failed to save: ${err.message}`,
+      try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 180000); // 3 min timeout per batch
+
+        const response = await fetch(
+          `${API_BASE_URL}/convert-batch`,
+          {
+            method: "POST",
+            body: formData,
+            signal: controller.signal,
+          }
+        );
+
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorText = await response.text();
+          throw new Error(`Batch API failed: ${response.status} - ${errorText}`);
+        }
+
+        const batchResult = await response.json();
+        console.log(`Batch ${batchIndex + 1} complete: ${batchResult.succeeded}/${batchResult.total} in ${batchResult.elapsed}`);
+
+        for (let i = 0; i < batchResult.results.length; i++) {
+          const result = batchResult.results[i];
+          const originalPath = batchPaths[i];
+          
+          if (result.success) {
+            try {
+              const filename = `sticker_${Date.now()}_${Math.random().toString(36).substr(2, 9)}.webp`;
+              const outputPath = this.outputDir + filename;
+
+              await FileSystem.writeAsStringAsync(outputPath, result.data, {
+                encoding: FileSystem.EncodingType.Base64,
+              });
+
+              allResults.push({
+                original: originalPath,
+                converted: outputPath,
+                success: true,
+                sizeKB: result.sizeKB,
+              });
+            } catch (err) {
+              allResults.push({
+                original: originalPath,
+                error: `Failed to save: ${err.message}`,
+                success: false,
+              });
+            }
+          } else {
+            allResults.push({
+              original: originalPath,
+              error: result.error,
               success: false,
             });
           }
-        } else {
-          results.push({
-            original: inputPaths[i],
-            error: result.error,
+        }
+
+        // Update progress after each batch
+        if (onProgress) {
+          onProgress((endIdx) / inputPaths.length);
+        }
+
+      } catch (error) {
+        console.error(`Batch ${batchIndex + 1} failed:`, error.message);
+        // Mark all stickers in this failed batch for individual retry
+        for (const path of batchPaths) {
+          allResults.push({
+            original: path,
+            error: `Batch failed: ${error.message}`,
             success: false,
           });
         }
+      }
+    }
 
-        if (onProgress) {
-          onProgress((i + 1) / total);
+    // Check if we need to retry failed stickers individually
+    const failedPaths = allResults.filter(r => !r.success).map(r => r.original);
+    if (failedPaths.length > 0) {
+      console.log(`Retrying ${failedPaths.length} failed stickers individually via API...`);
+      
+      // Retry failed ones with individual API calls (not local processing)
+      const retryResults = await this.convertBatchParallel(
+        failedPaths, 
+        null, 
+        { isAnimated: true, concurrency: 2 } // Lower concurrency for retries
+      );
+
+      // Replace failed results with retry results
+      for (const retryResult of retryResults) {
+        const idx = allResults.findIndex(r => r.original === retryResult.original);
+        if (idx !== -1) {
+          allResults[idx] = retryResult;
         }
       }
-
-      return results;
-    } catch (error) {
-      console.error("Batch conversion failed:", error);
-      // Fall back to parallel individual conversions
-      console.log("Falling back to parallel individual conversions...");
-      return this.convertBatchParallel(inputPaths, onProgress);
     }
+
+    return allResults;
   }
 
   /**

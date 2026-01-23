@@ -11,7 +11,7 @@ services:
     image: sticker-converter:latest
     container_name: sticker_converter_api
     ports:
-      - "8202:8202"
+      - "8201:8202"
     restart: unless-stopped
     volumes:
       # Mount server.js directly - changes apply with just down/up (no rebuild!)

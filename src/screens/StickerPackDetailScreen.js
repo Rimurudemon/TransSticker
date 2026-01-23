@@ -26,6 +26,7 @@ export default function StickerPackDetailScreen({ route, navigation }) {
   );
   const [downloading, setDownloading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [downloadPhase, setDownloadPhase] = useState(""); // "downloading", "converting", "retrying"
 
   // Calculate validation state based on selected stickers
   const validationState = useMemo(() => {
@@ -133,6 +134,40 @@ export default function StickerPackDetailScreen({ route, navigation }) {
     setSelectedStickers([]);
   };
 
+  // Parallel processing configuration
+  const PARALLEL_CONCURRENCY = 4; // Number of stickers to process in parallel
+
+  /**
+   * Process items in parallel with controlled concurrency
+   * @param {Array} items - Array of items to process
+   * @param {Function} processor - Async function to process each item
+   * @param {number} concurrency - Max parallel operations
+   * @param {Function} onProgress - Progress callback
+   */
+  const processInParallel = async (items, processor, concurrency, onProgress) => {
+    const results = [];
+    let completed = 0;
+    const total = items.length;
+
+    for (let i = 0; i < total; i += concurrency) {
+      const chunk = items.slice(i, Math.min(i + concurrency, total));
+      
+      const chunkPromises = chunk.map((item, chunkIndex) => 
+        processor(item, i + chunkIndex)
+      );
+
+      const chunkResults = await Promise.all(chunkPromises);
+      results.push(...chunkResults);
+      
+      completed += chunk.length;
+      if (onProgress) {
+        onProgress(Math.round((completed / total) * 100));
+      }
+    }
+
+    return results;
+  };
+
   const downloadAndSave = async () => {
     if (selectedStickers.length === 0) {
       Alert.alert(
@@ -174,20 +209,23 @@ export default function StickerPackDetailScreen({ route, navigation }) {
       let hasAnimatedSticker = false;
       let hasVideoSticker = false;
 
-      // Helper function to download a single sticker
-      const downloadSingleSticker = async (sticker, index) => {
+      // Track animated/video flags across all stickers
+      selectedStickerData.forEach(sticker => {
+        if (pack.is_animated || sticker.is_animated) hasAnimatedSticker = true;
+        if (pack.is_video || sticker.is_video) hasVideoSticker = true;
+      });
+
+      // Step 1: Download all stickers in parallel (fast network I/O)
+      setDownloadPhase("Downloading stickers...");
+      console.log(`Starting parallel download of ${selectedStickerData.length} stickers...`);
+      
+      const downloadSingleFile = async (sticker, index) => {
         try {
-          // Download the sticker file
           const fileUrl = await telegramService.getFileUrl(sticker.file_id);
 
-          // Check if this sticker is animated (TGS) or video
           const isAnimatedSticker = pack.is_animated || sticker.is_animated;
           const isVideoSticker = pack.is_video || sticker.is_video;
 
-          if (isAnimatedSticker) hasAnimatedSticker = true;
-          if (isVideoSticker) hasVideoSticker = true;
-
-          // Determine extension based on sticker type
           let extension = "webp";
           if (isAnimatedSticker) extension = "tgs";
           else if (isVideoSticker) extension = "webm";
@@ -201,48 +239,148 @@ export default function StickerPackDetailScreen({ route, navigation }) {
             `${pack.name}_${sticker.file_unique_id}.${extension}`,
           );
 
-          console.log(`Downloaded sticker to: ${localPath}`);
-
-          // Convert to WhatsApp format
-          const convertedPath = await converter.convertToWhatsAppFormat(
-            localPath,
-            isAnimatedSticker || isVideoSticker,
-          );
-          console.log(`Converted sticker to: ${convertedPath}`);
+          console.log(`Downloaded sticker ${index} to: ${localPath}`);
 
           return {
             success: true,
-            sticker: {
-              ...sticker,
-              localPath: convertedPath,
-              originalPath: localPath,
-            },
+            sticker,
+            localPath,
+            isAnimated: isAnimatedSticker || isVideoSticker,
+            index,
           };
         } catch (err) {
-          console.error(`Failed sticker ${index}:`, err);
+          console.error(`Failed to download sticker ${index}:`, err);
           return {
             success: false,
             sticker,
-            error: err.message || "Unknown error",
+            error: err.message || "Download failed",
+            index,
           };
         }
       };
 
-      // First pass - download all stickers
-      for (let i = 0; i < selectedStickerData.length; i++) {
-        const sticker = selectedStickerData[i];
-        setProgress(Math.round(((i + 1) / selectedStickerData.length) * 100));
+      // Download files in parallel
+      const downloadResults = await processInParallel(
+        selectedStickerData,
+        downloadSingleFile,
+        PARALLEL_CONCURRENCY,
+        (prog) => setProgress(Math.round(prog * 0.4)) // Downloads = 40% of progress
+      );
 
-        const result = await downloadSingleSticker(sticker, i);
-        if (result.success) {
-          downloadedStickers.push(result.sticker);
-        } else {
-          failedStickers.push({ sticker: result.sticker, error: result.error, index: i });
+      const successfulDownloads = downloadResults.filter(r => r.success);
+      const failedDownloads = downloadResults.filter(r => !r.success);
+
+      console.log(`Downloaded ${successfulDownloads.length}/${selectedStickerData.length} stickers`);
+
+      // Step 2: Convert stickers - use batch API for animated, parallel for static
+      if (successfulDownloads.length > 0) {
+        const animatedStickers = successfulDownloads.filter(r => r.isAnimated);
+        const staticStickers = successfulDownloads.filter(r => !r.isAnimated);
+
+        console.log(`Converting ${animatedStickers.length} animated + ${staticStickers.length} static stickers...`);
+        setDownloadPhase("Converting stickers...");
+
+        // Convert animated stickers using batch API (sends multiple to server at once)
+        if (animatedStickers.length > 0) {
+          try {
+            const animatedPaths = animatedStickers.map(r => r.localPath);
+            const batchResults = await converter.convertBatch(
+              animatedPaths,
+              (prog) => setProgress(40 + Math.round(prog * 40)), // Animated conversion = 40% of progress
+              { isAnimated: true, useBatchApi: true, concurrency: PARALLEL_CONCURRENCY }
+            );
+
+            batchResults.forEach((result, i) => {
+              const originalData = animatedStickers[i];
+              if (result.success) {
+                downloadedStickers.push({
+                  ...originalData.sticker,
+                  localPath: result.converted,
+                  originalPath: originalData.localPath,
+                });
+              } else {
+                failedStickers.push({
+                  sticker: originalData.sticker,
+                  error: result.error,
+                  index: originalData.index,
+                });
+              }
+            });
+          } catch (error) {
+            console.error("Batch conversion failed:", error);
+            // Fallback: add all animated as failed
+            animatedStickers.forEach(r => {
+              failedStickers.push({
+                sticker: r.sticker,
+                error: error.message,
+                index: r.index,
+              });
+            });
+          }
+        }
+
+        // Convert static stickers in parallel locally
+        if (staticStickers.length > 0) {
+          const convertStatic = async (downloadResult) => {
+            try {
+              const convertedPath = await converter.convertToWhatsAppFormat(
+                downloadResult.localPath,
+                false // static
+              );
+              return {
+                success: true,
+                sticker: {
+                  ...downloadResult.sticker,
+                  localPath: convertedPath,
+                  originalPath: downloadResult.localPath,
+                },
+              };
+            } catch (err) {
+              return {
+                success: false,
+                sticker: downloadResult.sticker,
+                error: err.message,
+                index: downloadResult.index,
+              };
+            }
+          };
+
+          const staticResults = await processInParallel(
+            staticStickers,
+            convertStatic,
+            PARALLEL_CONCURRENCY,
+            (prog) => setProgress(80 + Math.round(prog * 15)) // Static conversion = 15% of progress
+          );
+
+          staticResults.forEach(result => {
+            if (result.success) {
+              downloadedStickers.push(result.sticker);
+            } else {
+              failedStickers.push({
+                sticker: result.sticker,
+                error: result.error,
+                index: result.index,
+              });
+            }
+          });
         }
       }
 
+      // Add download failures to failed list
+      failedDownloads.forEach(r => {
+        failedStickers.push({
+          sticker: r.sticker,
+          error: r.error,
+          index: r.index,
+        });
+      });
+
+      setProgress(95);
+      setDownloadPhase("Finalizing...");
+
       // If there are failed stickers, ask user if they want to retry
       const retryFailedStickers = async (failed, retryCount = 1) => {
+        setDownloadPhase(`Retrying failed stickers (attempt ${retryCount})...`);
         return new Promise((resolve) => {
           const failedCount = failed.length;
           const failedInfo = failed.slice(0, 3).map(f => 
@@ -257,17 +395,60 @@ export default function StickerPackDetailScreen({ route, navigation }) {
               {
                 text: "Skip Failed",
                 style: "cancel",
-                onPress: () => resolve({ retry: false, stickers: [] }),
+                onPress: () => resolve({ retry: false, results: [] }),
               },
               {
                 text: "Retry Failed",
                 onPress: async () => {
-                  const retryResults = [];
-                  for (let i = 0; i < failed.length; i++) {
-                    setProgress(Math.round(((i + 1) / failed.length) * 100));
-                    const result = await downloadSingleSticker(failed[i].sticker, failed[i].index);
-                    retryResults.push(result);
-                  }
+                  // Retry download and convert in parallel
+                  const retryProcessor = async (failedItem) => {
+                    try {
+                      const sticker = failedItem.sticker;
+                      const fileUrl = await telegramService.getFileUrl(sticker.file_id);
+
+                      const isAnimatedSticker = pack.is_animated || sticker.is_animated;
+                      const isVideoSticker = pack.is_video || sticker.is_video;
+
+                      let extension = "webp";
+                      if (isAnimatedSticker) extension = "tgs";
+                      else if (isVideoSticker) extension = "webm";
+
+                      const localPath = await telegramService.downloadFile(
+                        fileUrl,
+                        `${pack.name}_${sticker.file_unique_id}.${extension}`,
+                      );
+
+                      const convertedPath = await converter.convertToWhatsAppFormat(
+                        localPath,
+                        isAnimatedSticker || isVideoSticker,
+                      );
+
+                      return {
+                        success: true,
+                        sticker: {
+                          ...sticker,
+                          localPath: convertedPath,
+                          originalPath: localPath,
+                        },
+                        index: failedItem.index,
+                      };
+                    } catch (err) {
+                      return {
+                        success: false,
+                        sticker: failedItem.sticker,
+                        error: err.message || "Retry failed",
+                        index: failedItem.index,
+                      };
+                    }
+                  };
+
+                  const retryResults = await processInParallel(
+                    failed,
+                    retryProcessor,
+                    PARALLEL_CONCURRENCY,
+                    (prog) => setProgress(Math.round(prog * 100))
+                  );
+                  
                   resolve({ retry: true, results: retryResults });
                 },
               },
@@ -291,11 +472,10 @@ export default function StickerPackDetailScreen({ route, navigation }) {
           if (result.success) {
             downloadedStickers.push(result.sticker);
           } else {
-            const originalFailed = failedStickers.find(f => f.sticker.file_id === result.sticker.file_id);
             newFailed.push({ 
               sticker: result.sticker, 
               error: result.error, 
-              index: originalFailed?.index || 0 
+              index: result.index 
             });
           }
         }
@@ -517,7 +697,8 @@ export default function StickerPackDetailScreen({ route, navigation }) {
       {downloading ? (
         <View style={styles.downloadingContainer}>
           <ActivityIndicator color="#6C63FF" size="large" />
-          <Text style={styles.downloadingText}>Downloading... {progress}%</Text>
+          <Text style={styles.downloadingText}>{downloadPhase || "Processing..."} {progress}%</Text>
+          <Text style={styles.parallelHint}>⚡ Processing in parallel for faster results</Text>
           <View style={styles.progressBar}>
             <View style={[styles.progressFill, { width: `${progress}%` }]} />
           </View>
@@ -652,6 +833,12 @@ const styles = StyleSheet.create({
   progressFill: {
     height: "100%",
     backgroundColor: "#6C63FF",
+  },
+  parallelHint: {
+    color: "#888",
+    fontSize: 12,
+    marginBottom: 10,
+    fontStyle: "italic",
   },
   downloadButton: {
     position: "absolute",
