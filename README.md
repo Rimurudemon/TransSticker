@@ -14,12 +14,6 @@ A React Native mobile app that transfers stickers between Telegram and WhatsApp.
 ✅ **Export to WhatsApp** - Share stickers or create sticker packs  
 ✅ **Modern UI** - Clean, dark-themed interface with smooth navigation
 
-## Screenshots
-
-| Home | Telegram Import | Export |
-| ---- | --------------- | ------ |
-| 🏠   | 📥              | 📤     |
-
 ## Prerequisites
 
 - Node.js 18+ and npm
