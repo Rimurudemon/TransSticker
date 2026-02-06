@@ -8,6 +8,7 @@ import {
   Alert,
   ScrollView,
 } from "react-native";
+import * as FileSystem from "expo-file-system/legacy";
 import { useStickers } from "../context/StickerContext";
 import StickerConverter from "../utils/StickerConverter";
 import AnimatedSticker from "../components/AnimatedSticker";
@@ -25,9 +26,10 @@ export default function SavedPackDetailScreen({ route, navigation }) {
 
   // Calculate validation state based on selected stickers
   const validationState = useMemo(() => {
-    const selectedStickerData = pack.stickers?.filter((s) =>
-      selectedStickers.includes(s.file_id || s.file_unique_id)
-    ) || [];
+    const selectedStickerData =
+      pack.stickers?.filter((s) =>
+        selectedStickers.includes(s.file_id || s.file_unique_id),
+      ) || [];
 
     const count = selectedStickerData.length;
 
@@ -36,7 +38,11 @@ export default function SavedPackDetailScreen({ route, navigation }) {
     let animatedCount = 0;
 
     selectedStickerData.forEach((sticker) => {
-      const isAnimated = pack.is_animated || pack.is_video || sticker.is_animated || sticker.is_video;
+      const isAnimated =
+        pack.is_animated ||
+        pack.is_video ||
+        sticker.is_animated ||
+        sticker.is_video;
       if (isAnimated) {
         animatedCount++;
       } else {
@@ -72,7 +78,10 @@ export default function SavedPackDetailScreen({ route, navigation }) {
       isAboveMaximum,
       needsSplitting,
       packSplitInfo,
-      isValid: count >= WHATSAPP_MIN_STICKERS && !hasMixedTypes,
+      // isValid: true if we have stickers and no mixed types (allows 1-2 stickers for Matrix choice)
+      isValid: count > 0 && !hasMixedTypes,
+      // canExportDirectly: true only if we meet WhatsApp minimum
+      canExportDirectly: count >= WHATSAPP_MIN_STICKERS && !hasMixedTypes,
     };
   }, [selectedStickers, pack.stickers, pack.is_animated, pack.is_video]);
 
@@ -122,7 +131,9 @@ export default function SavedPackDetailScreen({ route, navigation }) {
   };
 
   const selectAll = () => {
-    setSelectedStickers(pack.stickers?.map((s) => s.file_id || s.file_unique_id) || []);
+    setSelectedStickers(
+      pack.stickers?.map((s) => s.file_id || s.file_unique_id) || [],
+    );
   };
 
   const deselectAll = () => {
@@ -138,11 +149,9 @@ export default function SavedPackDetailScreen({ route, navigation }) {
       return;
     }
 
+    // Matrix-style choice for insufficient stickers
     if (validationState.isBelowMinimum) {
-      Alert.alert(
-        "Minimum Stickers Required",
-        `WhatsApp requires at least ${WHATSAPP_MIN_STICKERS} stickers per pack. Please select ${WHATSAPP_MIN_STICKERS - validationState.count} more stickers.`,
-      );
+      showMatrixChoice();
       return;
     }
 
@@ -154,13 +163,124 @@ export default function SavedPackDetailScreen({ route, navigation }) {
       return;
     }
 
-    // Get selected sticker data - these already have localPath (no download needed!)
+    // Proceed with normal export
+    await proceedWithExport();
+  };
+
+  // Matrix-style Red Pill / Blue Pill choice
+  const showMatrixChoice = () => {
+    const count = validationState.count;
+    const needed = WHATSAPP_MIN_STICKERS - count;
+
+    const duplicateMessage =
+      count === 1
+        ? "I will duplicate this sticker twice to create a pack of 3 identical stickers."
+        : "I will duplicate one of your stickers to create a pack of 3 stickers.";
+
+    Alert.alert(
+      "🔴 Red Pill or 🔵 Blue Pill? 💊",
+      `You have selected only ${count} sticker${count > 1 ? "s" : ""}. WhatsApp requires at least 3 stickers per pack.\n\n` +
+        `Choose your path:\n\n` +
+        `🔴 RED PILL: Face reality - go back and select ${needed} more sticker${needed > 1 ? "s" : ""} from this pack.\n\n` +
+        `🔵 BLUE PILL: Stay in the Matrix - ${duplicateMessage}`,
+      [
+        {
+          text: "🔴 Red Pill",
+          style: "cancel",
+          onPress: () => {
+            // Just close the dialog, user can select more
+          },
+        },
+        {
+          text: "🔵 Blue Pill",
+          onPress: () => duplicateAndExport(),
+        },
+      ],
+    );
+  };
+
+  // Duplicate stickers to meet minimum requirement
+  const duplicateAndExport = async () => {
+    try {
+      const selectedStickerData = pack.stickers.filter((s) =>
+        selectedStickers.includes(s.file_id || s.file_unique_id),
+      );
+
+      const count = selectedStickerData.length;
+      const duplicatesNeeded = WHATSAPP_MIN_STICKERS - count;
+
+      // Create duplicates
+      const duplicatedStickers = [...selectedStickerData];
+
+      for (let i = 0; i < duplicatesNeeded; i++) {
+        // Pick sticker to duplicate (cycle through existing ones)
+        const sourceStickerIndex = i % count;
+        const sourceSticker = selectedStickerData[sourceStickerIndex];
+
+        // Create a copy of the file with a new name
+        const timestamp = Date.now();
+        const originalPath = sourceSticker.localPath;
+        const extension = originalPath.split(".").pop();
+        const newFilename = `duplicate_${timestamp}_${i}.${extension}`;
+        const newPath =
+          FileSystem.documentDirectory + `transsticker/${newFilename}`;
+
+        await FileSystem.copyAsync({
+          from: originalPath,
+          to: newPath,
+        });
+
+        // Create duplicate sticker object
+        const duplicateSticker = {
+          ...sourceSticker,
+          file_id: `${sourceSticker.file_id || sourceSticker.file_unique_id}_dup_${i}`,
+          file_unique_id: `${sourceSticker.file_unique_id}_dup_${i}`,
+          localPath: newPath,
+          isDuplicate: true,
+        };
+
+        duplicatedStickers.push(duplicateSticker);
+      }
+
+      // Show info about what we did
+      const duplicateInfo =
+        count === 1
+          ? "Duplicated your sticker twice"
+          : `Duplicated ${duplicatesNeeded} sticker${duplicatesNeeded > 1 ? "s" : ""}`;
+
+      Alert.alert(
+        "🔵 Blue Pill Taken!",
+        `${duplicateInfo} to meet the minimum requirement.\n\nYou now have ${duplicatedStickers.length} stickers ready to export.`,
+        [
+          {
+            text: "Continue to Export",
+            onPress: () => proceedWithExportData(duplicatedStickers),
+          },
+        ],
+      );
+    } catch (error) {
+      console.error("Error duplicating stickers:", error);
+      Alert.alert(
+        "Duplication Failed",
+        "Failed to duplicate stickers. Please try selecting more stickers instead.",
+      );
+    }
+  };
+
+  // Proceed with export using selected sticker data
+  const proceedWithExport = async () => {
     const selectedStickerData = pack.stickers.filter((s) =>
       selectedStickers.includes(s.file_id || s.file_unique_id),
     );
+    await proceedWithExportData(selectedStickerData);
+  };
 
+  // Export with the given sticker data
+  const proceedWithExportData = async (stickerData) => {
     // Check if we're exporting all stickers (no need to create a new pack)
-    const isFullExport = selectedStickers.length === pack.stickers.length;
+    const isFullExport =
+      stickerData.length === pack.stickers.length &&
+      !stickerData.some((s) => s.isDuplicate);
 
     if (isFullExport) {
       // Export the original pack directly
@@ -173,17 +293,20 @@ export default function SavedPackDetailScreen({ route, navigation }) {
       const converter = new StickerConverter();
 
       // Check if we need to split into multiple packs
-      const needsSplit = selectedStickerData.length > WHATSAPP_MAX_STICKERS;
+      const needsSplit = stickerData.length > WHATSAPP_MAX_STICKERS;
 
       if (needsSplit) {
         // Split stickers into multiple packs
-        const numPacks = Math.ceil(selectedStickerData.length / WHATSAPP_MAX_STICKERS);
+        const numPacks = Math.ceil(stickerData.length / WHATSAPP_MAX_STICKERS);
         const savedPacks = [];
 
         for (let packIndex = 0; packIndex < numPacks; packIndex++) {
           const startIdx = packIndex * WHATSAPP_MAX_STICKERS;
-          const endIdx = Math.min(startIdx + WHATSAPP_MAX_STICKERS, selectedStickerData.length);
-          const packStickers = selectedStickerData.slice(startIdx, endIdx);
+          const endIdx = Math.min(
+            startIdx + WHATSAPP_MAX_STICKERS,
+            stickerData.length,
+          );
+          const packStickers = stickerData.slice(startIdx, endIdx);
 
           // Create tray icon from first sticker of this sub-pack
           const trayIconPath = await converter.createTrayIcon(
@@ -229,7 +352,7 @@ export default function SavedPackDetailScreen({ route, navigation }) {
       } else {
         // Single subset pack
         const trayIconPath = await converter.createTrayIcon(
-          selectedStickerData[0].localPath,
+          stickerData[0].localPath,
         );
 
         // Create a temporary pack object for export (no need to save it)
@@ -237,7 +360,7 @@ export default function SavedPackDetailScreen({ route, navigation }) {
           id: `${pack.id}_subset_${Date.now()}`,
           name: `${pack.name}_selection`,
           title: `${pack.title} (Selection)`,
-          stickers: selectedStickerData,
+          stickers: stickerData,
           trayIcon: trayIconPath,
           source: pack.source,
           originalPackName: pack.name,
@@ -254,7 +377,8 @@ export default function SavedPackDetailScreen({ route, navigation }) {
       console.error("Error creating subset pack:", error);
       Alert.alert(
         "Export Failed",
-        error.message || "Failed to prepare stickers for export. Please try again.",
+        error.message ||
+          "Failed to prepare stickers for export. Please try again.",
       );
     }
   };
@@ -299,15 +423,18 @@ export default function SavedPackDetailScreen({ route, navigation }) {
         <Text style={styles.packTitle}>{pack.title}</Text>
         <Text style={styles.packInfo}>
           {pack.stickers?.length || 0} stickers •{" "}
-          {pack.is_animated || pack.is_video ? "Animated" : "Static"} •{" "}
-          Already saved locally ✅
+          {pack.is_animated || pack.is_video ? "Animated" : "Static"} • Already
+          saved locally ✅
         </Text>
       </View>
 
       {/* Selection Controls */}
       <View style={styles.controls}>
         <TouchableOpacity
-          style={[styles.controlButton, allSelected && styles.controlButtonActive]}
+          style={[
+            styles.controlButton,
+            allSelected && styles.controlButtonActive,
+          ]}
           onPress={allSelected ? deselectAll : selectAll}
         >
           <Text style={styles.controlButtonText}>
@@ -354,7 +481,9 @@ export default function SavedPackDetailScreen({ route, navigation }) {
       <FlatList
         data={pack.stickers}
         renderItem={renderSticker}
-        keyExtractor={(item, index) => item.file_id || item.file_unique_id || index.toString()}
+        keyExtractor={(item, index) =>
+          item.file_id || item.file_unique_id || index.toString()
+        }
         numColumns={4}
         contentContainerStyle={styles.grid}
         showsVerticalScrollIndicator={false}
