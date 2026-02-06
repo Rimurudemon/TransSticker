@@ -37,7 +37,7 @@ export default function SavedPacksScreen({ navigation }) {
   const renderPack = ({ item }) => (
     <TouchableOpacity
       style={styles.packCard}
-      onPress={() => navigation.navigate("StickerPackDetail", { pack: item })}
+      onPress={() => navigation.navigate("SavedPackDetail", { pack: item })}
     >
       <View style={styles.packPreview}>
         {item.stickers?.slice(0, 4).map((sticker, index) => (

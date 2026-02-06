@@ -7,6 +7,7 @@ import { Text, View, StyleSheet } from "react-native";
 import HomeScreen from "../screens/HomeScreen";
 import TelegramStickersScreen from "../screens/TelegramStickersScreen";
 import StickerPackDetailScreen from "../screens/StickerPackDetailScreen";
+import SavedPackDetailScreen from "../screens/SavedPackDetailScreen";
 import WhatsAppExportScreen from "../screens/WhatsAppExportScreen";
 import SavedPacksScreen from "../screens/SavedPacksScreen";
 import SettingsScreen from "../screens/SettingsScreen";
@@ -73,9 +74,14 @@ function SavedStack() {
         options={{ title: "Saved Packs" }}
       />
       <Stack.Screen
-        name="StickerPackDetail"
-        component={StickerPackDetailScreen}
-        options={{ title: "Sticker Pack" }}
+        name="SavedPackDetail"
+        component={SavedPackDetailScreen}
+        options={{ title: "Saved Pack" }}
+      />
+      <Stack.Screen
+        name="WhatsAppExport"
+        component={WhatsAppExportScreen}
+        options={{ title: "Export to WhatsApp" }}
       />
     </Stack.Navigator>
   );
